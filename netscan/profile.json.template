@@ -1,0 +1,64 @@
+{
+  "__comment": "User profile for LLM context, interest scoring, and proactive alerts. Copy to profile.json (git-ignored) and fill it in.",
+
+  "name": "Your name",
+  "role": "What you do, in a few words",
+  "dashboard_url": "http://127.0.0.1:8888",
+
+  "signal": {
+    "from": "+<BOT_PHONE>",
+    "to": "+<OWNER_PHONE>",
+    "rpc": "http://127.0.0.1:8080/api/v1/rpc",
+    "style": "short",
+    "max_alert_chars": 500
+  },
+
+  "interests": [
+    "Example: camera / imaging pipelines on embedded Linux (V4L2, libcamera, ISP, MIPI CSI-2)",
+    "Example: ARM SoC bringup — Qualcomm, Rockchip, MediaTek, Amlogic, NXP i.MX",
+    "Example: GStreamer video pipelines, hardware-accelerated encode/decode",
+    "Example: local LLM inference on consumer/edge hardware",
+    "Example: home automation & sensor networks — Home Assistant, Zigbee, ESPHome"
+  ],
+
+  "hardware": [
+    "Example: AMD BC-250 (Zen 2 6c/12t + Cyan Skillfish RDNA1 gfx1013, 16GB GDDR6)",
+    "Example: a couple of ARM SBCs and an RTL-SDR dongle"
+  ],
+
+  "book_interests": [
+    "Linux kernel internals & driver development",
+    "Embedded systems & real-time programming",
+    "Software-defined radio & RF engineering",
+    "RISC-V architecture & programming",
+    "Machine learning on edge hardware"
+  ],
+
+  "interest_keywords": {
+    "high": [
+      "v4l2", "libcamera", "isp", "mipi", "csi-2", "camera", "uvc",
+      "gstreamer", "v4l2src", "vaapi", "vulkan video",
+      "gmsl", "max96712", "max9295", "max96714", "serdes", "fpd-link",
+      "rockchip", "qualcomm", "mediatek", "amlogic", "allwinner",
+      "rk3588", "rk3566", "imx8m",
+      "device tree", "devicetree", "dt-binding",
+      "rdna", "amdgpu", "radv", "cyan skillfish", "gfx1013",
+      "ollama", "llama.cpp", "gguf", "vulkan compute"
+    ],
+    "medium": [
+      "sensor", "imx", "omnivision", "pixel format", "bayer",
+      "clock", "pinctrl", "regulator", "pmic", "power-domain",
+      "ffmpeg", "hwaccel", "encode", "decode",
+      "usb", "gadget", "xhci",
+      "risc-v", "starfive",
+      "mesa", "drm", "kms"
+    ],
+    "low": [
+      "arm64", "dts", "soc", "platform_driver",
+      "mmc", "emmc", "sdio",
+      "pcie", "nvme",
+      "thermal", "cpufreq",
+      "zigbee", "z-wave", "esphome", "home assistant"
+    ]
+  }
+}

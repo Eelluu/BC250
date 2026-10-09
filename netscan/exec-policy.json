@@ -1,0 +1,13 @@
+{
+  "_comment": "Politica de ejecucion de EXEC. El portero (is_command_safe) sigue mandando; esto solo AMPLIA la allowlist y marca que binarios van al sandbox. Deny por defecto: lista vacia = sin cambios de comportamiento. OJO: los comandos EXEC se ejecutan SIN aprobacion humana (los botones son para propose-script/edit-file), asi que aqui solo deberian entrar binarios sin efectos secundarios.",
+  "version": 1,
+  "extra_allow": [
+    {
+      "bin": "df",
+      "why": "Espacio en disco, solo lectura, sin efectos.",
+      "added": "2026-10-04"
+    }
+  ],
+  "_por_que_no_arieltune": "Budget de ejemplo NO activado: `arieltune apu gpu force N` o `arieltune apu cu route` ESCRIBEN en la SMU / re-enrutan CUs, y EXEC no pasa por aprobacion. Cuando existan reglas por argumento se podria permitir solo lectura (`arieltune apu cu status`, `arieltune apu gpu status`).",
+  "sandbox_bins": ["python3", "bash", "sh"]
+}

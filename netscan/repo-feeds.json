@@ -1,0 +1,244 @@
+{
+  "__comment": "Repository issue/MR monitors — used by repo-watch.sh",
+  "__api_note": "GitHub: 60 req/hr unauthenticated. GitLab freedesktop.org: 300 req/hr.",
+
+  "gstreamer": {
+    "name": "GStreamer",
+    "emoji": "🎬",
+    "type": "gitlab",
+    "api_base": "https://gitlab.freedesktop.org/api/v4",
+    "project_path": "gstreamer/gstreamer",
+    "web_url": "https://gitlab.freedesktop.org/gstreamer/gstreamer",
+    "track": ["issues", "merge_requests"],
+    "labels_filter": [],
+    "data_dir": "repos/gstreamer",
+    "nav_label": "GSTREAMER",
+    "page_slug": "issues",
+    "relevance": {
+      "v4l2": 5, "v4l2src": 5, "v4l2sink": 4, "v4l2dec": 4, "v4l2enc": 4,
+      "camera": 4, "libcamera": 5, "libcamerasrc": 5,
+      "vaapi": 4, "va": 3, "vah264": 3, "vah265": 3,
+      "vulkan": 4, "vulkan video": 5,
+      "dmabuf": 4, "dma-buf": 4, "drm": 3,
+      "amf": 3, "amd": 3, "radeon": 3,
+      "isp": 3, "raw": 2, "bayer": 3,
+      "encode": 2, "decode": 2, "hwaccel": 3,
+      "pipeline": 2, "caps": 1, "negotiate": 2,
+      "meson": 1, "ci": -1, "docs": -1, "typo": -2
+    },
+    "min_score": 3
+  },
+
+  "libcamera": {
+    "name": "libcamera",
+    "emoji": "📸",
+    "type": "gitlab",
+    "api_base": "https://gitlab.freedesktop.org/api/v4",
+    "project_path": "camera/libcamera",
+    "web_url": "https://gitlab.freedesktop.org/camera/libcamera",
+    "track": ["issues"],
+    "labels_filter": [],
+    "data_dir": "repos/libcamera",
+    "nav_label": "LIBCAMERA",
+    "page_slug": "issues",
+    "relevance": {
+      "isp": 5, "pipeline": 4, "ipa": 5, "sensor": 4,
+      "v4l2": 4, "media-ctl": 3, "subdev": 3,
+      "rkisp": 5, "mali-c55": 4, "pisp": 4, "imx8": 4, "camss": 4,
+      "raw": 3, "bayer": 3, "metadata": 3,
+      "gstreamer": 4, "libcamerasrc": 5,
+      "android": 2, "hal": 2,
+      "control": 2, "property": 2,
+      "rockchip": 4, "qualcomm": 4, "mediatek": 3,
+      "gmsl": 4, "serdes": 3, "max96712": 4, "deserializer": 3,
+      "imx": 3, "omnivision": 3, "sony": 3,
+      "usb": 2, "uvc": 3,
+      "format": 2, "drm": 2,
+      "docs": -1, "ci": -1, "style": -2
+    },
+    "min_score": 3
+  },
+
+  "v4l-utils": {
+    "name": "v4l-utils",
+    "emoji": "🔧",
+    "type": "github",
+    "owner": "gjasny",
+    "repo": "v4l-utils",
+    "web_url": "https://github.com/gjasny/v4l-utils",
+    "track": ["pull_requests"],
+    "data_dir": "repos/v4l-utils",
+    "nav_label": "V4L-UTILS",
+    "page_slug": "issues",
+    "relevance": {
+      "v4l2-ctl": 5, "v4l2-compliance": 5, "v4l2-info": 4,
+      "media-ctl": 4, "ir-ctl": 1,
+      "libv4l": 4, "v4l2convert": 3,
+      "subdev": 3, "format": 2, "fourcc": 3,
+      "camera": 3, "sensor": 3,
+      "streaming": 3, "dmabuf": 4, "mmap": 2,
+      "edid": 2, "cec": -1, "dvb": -2
+    },
+    "min_score": 2
+  },
+
+  "ffmpeg": {
+    "name": "FFmpeg Patches",
+    "emoji": "🎞️",
+    "type": "patchwork",
+    "api_base": "https://patchwork.ffmpeg.org/api/1.3",
+    "project_id": 1,
+    "web_url": "https://patchwork.ffmpeg.org/project/ffmpeg/list/",
+    "track": ["patches"],
+    "data_dir": "repos/ffmpeg",
+    "nav_label": "FFMPEG",
+    "page_slug": "issues",
+    "relevance": {
+      "vaapi": 5, "vulkan": 5, "vulkan video": 5, "spir-v": 4, "spirv": 4,
+      "amf": 5, "amd": 3, "radeon": 3,
+      "v4l2": 4, "v4l2_m2m": 5, "libcamera": 4,
+      "hwaccel": 4, "hwcontext": 4, "hwframe": 3,
+      "drm": 3, "dmabuf": 3, "prime": 3,
+      "av1": 3, "hevc": 3, "h264": 2, "h265": 3,
+      "decode": 2, "encode": 2,
+      "filter": 2, "scale": 2, "format": 1,
+      "qsv": 2, "nvenc": 1, "cuda": 1,
+      "libavcodec": 2, "libavfilter": 2, "libavdevice": 3,
+      "rockchip": 3, "mediatek": 3, "hantro": 3, "rkmpp": 4,
+      "docs": -1, "changelog": -2, "typo": -2, "cosmetic": -2
+    },
+    "min_score": 3
+  },
+
+  "linuxtv": {
+    "name": "LinuxTV / linux-media",
+    "emoji": "📺",
+    "type": "patchwork",
+    "api_base": "https://patchwork.linuxtv.org/api/1.3",
+    "project_id": 1,
+    "web_url": "https://patchwork.linuxtv.org/project/linux-media/list/",
+    "track": ["patches"],
+    "data_dir": "repos/linuxtv",
+    "nav_label": "LINUXTV",
+    "page_slug": "issues",
+    "relevance": {
+      "v4l2": 5, "v4l2-ctl": 5, "v4l2-compliance": 5,
+      "media-ctl": 4, "subdev": 4,
+      "camera": 4, "libcamera": 4, "sensor": 4,
+      "isp": 5, "rkisp1": 5, "rkisp": 5, "camss": 5, "mali-c55": 4, "pisp": 4,
+      "rockchip": 4, "qualcomm": 4, "mediatek": 3, "samsung": 3,
+      "v4l2-mem2mem": 4, "hantro": 4, "rkmpp": 4, "cedrus": 4, "wave5": 4,
+      "dma-buf": 3, "dmabuf": 3,
+      "raw": 2, "bayer": 3, "metadata": 3,
+      "format": 2, "fourcc": 3,
+      "imx": 3, "omnivision": 3, "sony": 3,
+      "gmsl": 5, "max96712": 5, "max9295": 5, "max96714": 5, "max96717": 5,
+      "max9296": 5, "deserializer": 5, "serializer": 5, "serdes": 5,
+      "fpd-link": 4, "fpd_link": 4, "ds90ub": 4,
+      "uvc": 3, "usb": 2,
+      "vimc": 2, "vivid": 2,
+      "cec": -1, "dvb": -2, "rc": -2, "ir": -2, "radio": -2
+    },
+    "min_score": 3
+  },
+
+  "v4l2loopback": {
+    "name": "v4l2loopback",
+    "emoji": "🔁",
+    "type": "github",
+    "owner": "umlaeute",
+    "repo": "v4l2loopback",
+    "web_url": "https://github.com/umlaeute/v4l2loopback",
+    "track": ["issues", "pull_requests"],
+    "data_dir": "repos/v4l2loopback",
+    "nav_label": "V4L2LOOP",
+    "page_slug": "issues",
+    "relevance": {
+      "v4l2": 5, "loopback": 5, "virtual": 4,
+      "format": 3, "fourcc": 3, "pixel": 3,
+      "camera": 4, "device": 3,
+      "gstreamer": 4, "ffmpeg": 4, "obs": 3,
+      "kernel": 3, "module": 3, "compat": 3,
+      "dmabuf": 3, "mmap": 2,
+      "v4l2-ctl": 4, "v4l2-compliance": 4,
+      "docs": -1, "typo": -2
+    },
+    "min_score": 2
+  },
+
+  "adi-linux": {
+    "name": "Analog Devices Linux Drivers",
+    "emoji": "🔌",
+    "type": "github",
+    "owner": "analogdevicesinc",
+    "repo": "linux",
+    "web_url": "https://github.com/analogdevicesinc/linux",
+    "track": ["issues", "pull_requests"],
+    "data_dir": "repos/adi-linux",
+    "nav_label": "ADI-LINUX",
+    "page_slug": "issues",
+    "relevance": {
+      "gmsl": 5, "max96712": 5, "max9295": 5, "max96714": 5, "max96717": 5,
+      "max9296": 5, "max96724": 5, "deserializer": 5, "serializer": 5,
+      "serdes": 5, "coax": 4,
+      "mipi": 4, "csi": 4, "camera": 4, "sensor": 3,
+      "i2c": 3, "v4l2": 4, "media": 3, "subdev": 3,
+      "device tree": 3, "dt-binding": 3, "dts": 2,
+      "isp": 3, "fpd-link": 4, "fpd_link": 4,
+      "video": 2, "driver": 2,
+      "docs": -1, "ci": -1, "typo": -2
+    },
+    "min_score": 3
+  },
+
+  "adi-gmsl": {
+    "name": "ADI GMSL Drivers (standalone)",
+    "emoji": "🔗",
+    "type": "github",
+    "owner": "analogdevicesinc",
+    "repo": "gmsl",
+    "web_url": "https://github.com/analogdevicesinc/gmsl",
+    "track": ["issues", "pull_requests"],
+    "data_dir": "repos/adi-gmsl",
+    "nav_label": "ADI-GMSL",
+    "page_slug": "issues",
+    "relevance": {
+      "gmsl": 5, "max96712": 5, "max9295": 5, "max96714": 5, "max96717": 5,
+      "max9296": 5, "max96724": 5, "max96793": 4,
+      "deserializer": 5, "serializer": 5, "serdes": 5,
+      "mipi": 4, "csi": 4, "coax": 4,
+      "i2c": 3, "camera": 4, "sensor": 3,
+      "v4l2": 4, "device tree": 3, "dt-binding": 3,
+      "fpd-link": 4, "video": 2, "driver": 2,
+      "docs": -1, "ci": -1
+    },
+    "min_score": 2
+  },
+
+  "pipewire": {
+    "name": "PipeWire",
+    "emoji": "🔀",
+    "type": "gitlab",
+    "api_base": "https://gitlab.freedesktop.org/api/v4",
+    "project_path": "pipewire/pipewire",
+    "web_url": "https://gitlab.freedesktop.org/pipewire/pipewire",
+    "track": ["issues", "merge_requests"],
+    "labels_filter": [],
+    "data_dir": "repos/pipewire",
+    "nav_label": "PIPEWIRE",
+    "page_slug": "issues",
+    "relevance": {
+      "camera": 5, "v4l2": 5, "libcamera": 5,
+      "video": 4, "spa": 3, "spa-v4l2": 5,
+      "portal": 4, "pipewire-v4l2": 5,
+      "filter": 3, "stream": 3,
+      "dmabuf": 4, "dma-buf": 4,
+      "vulkan": 3, "drm": 3,
+      "format": 2, "negotiate": 2,
+      "gstreamer": 3,
+      "audio": -2, "pulse": -2, "jack": -2, "bluetooth": -3,
+      "docs": -1, "ci": -1, "typo": -2
+    },
+    "min_score": 3
+  }
+}

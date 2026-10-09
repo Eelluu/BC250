@@ -1,0 +1,31 @@
+{
+  "jobs": [
+    {
+      "id": "job_001",
+      "name": "netscan-scrape",
+      "enabled": true,
+      "payload": {
+        "message": "Run /opt/netscan/scan.sh to update network device list.",
+        "timeoutSeconds": 1800
+      }
+    },
+    {
+      "id": "job_002",
+      "name": "daily-summary",
+      "enabled": true,
+      "payload": {
+        "message": "Run /opt/netscan/daily-summary.py to generate the daily report.",
+        "timeoutSeconds": 600
+      }
+    },
+    {
+      "id": "job_003",
+      "name": "company-think",
+      "enabled": true,
+      "payload": {
+        "message": "Run /opt/netscan/company-think.py --deep to analyze competitive intelligence.",
+        "timeoutSeconds": 3600
+      }
+    }
+  ]
+}

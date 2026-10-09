@@ -1,0 +1,55 @@
+# macOS
+.DS_Store
+
+# Test outputs
+test_*.png
+
+# Temp/debug scripts
+/tmp/
+*.pyc
+__pycache__/
+
+# Private user data — career, profile, PDFs (NEVER commit)
+netscan/profile-private.json
+netscan/crawl-targets.json
+netscan/watchlist.json
+car-known-locations.json
+*.pdf
+# The live bot config: profiles and cron jobs hold personal data. Only the
+# .template files are committed; copy them into place on the box.
+netscan/profile.json
+jobs.json
+
+# Secrets (systemd units may contain tokens)
+# openclaw-gateway.service is tracked as reference (token redacted)
+user info/
+tmp/
+
+# Secrets — .env holds DISCORD_TOKEN / DISCORD_OWNER_ID. Never commit.
+.env
+.env.*
+netscan/.env
+netscan/.env.*
+# Keep committed examples/templates
+!.env.example
+!.env.template
+!netscan/.env.example
+
+# Internal notes (Claude session context, not for repo)
+internal_notes_claude.txt
+
+# Live backup from bc250
+bc250-backup/
+
+# Old/deprecated files kept for reference
+deprecated/
+
+# Article drafts (not for GitHub)
+article/
+texput.log
+.vscode/
+
+# Windows reserved device names (accidental redirects)
+nul
+
+.claude
