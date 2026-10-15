@@ -413,20 +413,61 @@ def _fmt(value, nd=3):
         return "-"
 
 
+def doubtful(record, ambiguity=0.35, confidence=0.60):
+    """Is this verdict shaky enough to be worth a second, thinking pass?
+
+    Doubt is measurable: the model reports how ambiguous it found the rules and
+    how confident it is, and a verdict that needed a repair or cites fewer than
+    two pieces of evidence is weak by its own standard. Cheap pass first,
+    thinking only where it might change something — and because both answers are
+    kept in the JSONL, market-score.py can later check which mode was the better
+    calibrated one, which is a question nobody can answer from a single mode.
+    """
+    verdict = record.get("verdict") or {}
+    return (float(verdict.get("ambiguity") or 0.0) >= ambiguity
+            or float(verdict.get("confidence") or 1.0) <= confidence
+            or bool(record.get("repaired"))
+            or len(verdict.get("key_evidence") or []) < 2)
+
+
+def record_for(market, verdict, meta, mode):
+    """One verdict record: the answer, the reasoning, and the world it saw."""
+    return {
+        "market_id": market["id"],
+        "question": market.get("question"),
+        "kind": market.get("kind"),
+        "url": market.get("url"),
+        "event_title": market.get("event_title"),
+        "end_date": market.get("end_date"),
+        "asked_at": meta["asked_at"],
+        "latency_s": meta["latency_s"],
+        "repaired": meta["repaired"],
+        "mode": mode,
+        "model": LLM_MODEL,
+        "rules_hash": rules_hash(market),
+        "price_yes_at_decision": market.get("price_yes"),
+        "spread_at_decision": market.get("spread"),
+        "fee_bps_at_decision": market.get("fee_bps"),
+        "edge_required": market.get("edge_required"),
+        "verdict": verdict,
+    }
+
+
 def print_report(records, dropped, elapsed, quiet=False):
     log(f"verdicts written: {len(records)}  in {elapsed / 60:.1f} min", quiet)
     if any(dropped.values()):
         log("skipped: " + ", ".join(f"{k}={v}" for k, v in dropped.items() if v), quiet)
     if quiet:
         return
-    print(f"\n  {'market_id':<9} {'kind':<6} {'p_yes':>6} {'price':>6} {'gap':>7} "
+    print(f"\n  {'market_id':<9} {'m':>1} {'kind':<6} {'p_yes':>6} {'price':>6} {'gap':>7} "
           f"{'amb':>5} {'conf':>5} {'s':>5}  question")
-    print("  " + "-" * 104)
+    print("  " + "-" * 106)
     for rec in records:
         v = rec["verdict"]
         price = rec.get("price_yes_at_decision")
         gap = (v["p_yes"] - price) if price is not None else None
-        print(f"  {rec['market_id']:<9} {rec.get('kind', '-'):<6} "
+        print(f"  {rec['market_id']:<9} {'T' if rec.get('mode') == 'think' else '':>1} "
+              f"{rec.get('kind', '-'):<6} "
               f"{_fmt(v['p_yes'], 6)} {_fmt(price, 6)} "
               f"{(('%+' + _fmt(gap, 3)) if gap is not None else '-'):>7} "
               f"{_fmt(v['ambiguity'], 5)} {_fmt(v['confidence'], 5)} "
@@ -517,7 +558,27 @@ def selftest():
         print(f"  json extraction -> {label:<21} {'OK' if good else 'FAIL'} "
               f"(p_yes={obj.get('p_yes')})")
 
-    # 7. Selection: priority + skips.
+    # 7. Escalation: doubt is measurable, so only doubtful verdicts get the
+    # expensive thinking pass.
+    clean = record_for(market, {"ambiguity": 0.1, "confidence": 0.9,
+                                "key_evidence": [{"claim": "a"}, {"claim": "b"}]},
+                       {"asked_at": now_iso(), "latency_s": 12.0, "repaired": False},
+                       mode="nothink")
+    unclear = record_for(market, {"ambiguity": 0.6, "confidence": 0.9,
+                                  "key_evidence": [{"claim": "a"}, {"claim": "b"}]},
+                         {"asked_at": now_iso(), "latency_s": 12.0, "repaired": False},
+                         mode="nothink")
+    thin = record_for(market, {"ambiguity": 0.1, "confidence": 0.9,
+                               "key_evidence": [{"claim": "a"}]},
+                      {"asked_at": now_iso(), "latency_s": 12.0, "repaired": False},
+                      mode="nothink")
+    ok &= not doubtful(clean) and doubtful(unclear) and doubtful(thin)
+    ok &= clean["mode"] == "nothink" and clean["market_id"] == "900002"
+    print(f"  escalation      -> doubtful: clean={doubtful(clean)} "
+          f"ambiguous={doubtful(unclear)} thin_evidence={doubtful(thin)} "
+          f"(want False/True/True)")
+
+    # 8. Selection: priority + skips.
     markets = [dict(market, id="1", kind="feed", liquidity=90000),
                dict(market, id="2", kind="fuzzy", liquidity=1000),
                dict(market, id="3", kind="event", liquidity=5000),
@@ -590,6 +651,7 @@ def run(args):
 
     t_start = time.time()
     records, failures = [], 0
+    by_id = {str(m["id"]): m for m in picked}
     for i, market in enumerate(picked, 1):
         elapsed = time.time() - t_start
         if elapsed > args.max_runtime:
@@ -622,28 +684,44 @@ def run(args):
                     f"# reasoning ({len(resp.get('reasoning') or '')} chars):\n"
                     f"{(resp.get('reasoning') or '')[:3000]}\n", encoding="utf-8")
             continue
-        records.append({
-            "market_id": market["id"],
-            "question": market.get("question"),
-            "kind": market.get("kind"),
-            "url": market.get("url"),
-            "event_title": market.get("event_title"),
-            "end_date": market.get("end_date"),
-            "asked_at": meta["asked_at"],
-            "latency_s": meta["latency_s"],
-            "repaired": meta["repaired"],
-            "model": LLM_MODEL,
-            "rules_hash": rules_hash(market),
-            "price_yes_at_decision": market.get("price_yes"),
-            "spread_at_decision": market.get("spread"),
-            "edge_required": market.get("edge_required"),
-            "verdict": verdict,
-        })
+        records.append(record_for(market, verdict, meta, mode="nothink"))
         log(f"[{i}/{len(picked)}] {market['id']} p_yes={_fmt(verdict['p_yes'])} "
             f"price={_fmt(market.get('price_yes'))} "
             f"amb={_fmt(verdict['ambiguity'], 2)} "
             f"conf={_fmt(verdict['confidence'], 2)} "
             f"({meta['latency_s']}s{' repaired' if meta['repaired'] else ''})", args.quiet)
+
+    # Second pass, only where it can change the answer. Measured on this box:
+    # ~12 s per market without thinking versus ~130 s with it, so the thinking
+    # budget goes to the verdicts that are doubtful by the model's own account.
+    escalated = 0
+    if args.escalate and records:
+        shaky = [r for r in records
+                 if doubtful(r, args.escalate_ambiguity, args.escalate_confidence)]
+        if shaky:
+            log(f"escalating {len(shaky)} doubtful verdict(s) to thinking mode "
+                f"(max_tokens {args.think_max_tokens})", args.quiet)
+        for rec in shaky:
+            if time.time() - t_start > args.max_runtime:
+                log("runtime cap reached during escalation — stopping cleanly", args.quiet)
+                break
+            market = by_id.get(str(rec["market_id"]))
+            if not market:
+                continue
+            verdict, meta = ask_model(market, max_tokens=args.think_max_tokens,
+                                      quiet=args.quiet, think=True)
+            if verdict is None:
+                log(f"  escalation rejected for {rec['market_id']}: {meta['error']}",
+                    args.quiet)
+                continue
+            records.append(record_for(market, verdict, meta, mode="think"))
+            escalated += 1
+            log(f"  escalated {rec['market_id']}: p_yes {_fmt(rec['verdict']['p_yes'])} "
+                f"-> {_fmt(verdict['p_yes'])}  amb {_fmt(rec['verdict']['ambiguity'], 2)} "
+                f"-> {_fmt(verdict['ambiguity'], 2)}  ({meta['latency_s']}s)", args.quiet)
+        if escalated:
+            log(f"escalated {escalated} verdict(s); both modes stay in the JSONL so "
+                f"market-score can compare which one calibrated better", args.quiet)
 
     if records:
         jsonl, latest = write_verdicts(data_dir, records)
@@ -698,10 +776,19 @@ def main(argv=None):
                     help="answer budget; a reasoning model needs room to think "
                          "before it writes the JSON")
     ap.add_argument("--think", action="store_true",
-                    help="keep the chain of thought. Measured on this box: with "
+                    help="think on every market. Measured on this box: with "
                          "--max-tokens 2500 the model spent the entire budget "
                          "thinking and emitted no JSON at all, so this is off by "
                          "default and wants 6000+ tokens when enabled")
+    ap.add_argument("--escalate", action="store_true",
+                    help="after the cheap pass, re-ask with thinking the verdicts "
+                         "that are doubtful (see --escalate-*)")
+    ap.add_argument("--escalate-ambiguity", type=float, default=0.35,
+                    help="escalate when the model reports at least this ambiguity")
+    ap.add_argument("--escalate-confidence", type=float, default=0.60,
+                    help="escalate when the model reports at most this confidence")
+    ap.add_argument("--think-max-tokens", type=int, default=6000,
+                    help="token budget for escalated verdicts")
     ap.add_argument("--probe", action="store_true",
                     help="one trivial call, show the raw response and exit")
     ap.add_argument("--kinds", help="feed,event,fuzzy (default: all, fuzzy first)")
