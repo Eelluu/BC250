@@ -138,8 +138,16 @@ def build_case(raw, lead_hours, assumed_spread, fidelity, quiet=False):
         end_dt = end_dt.replace(tzinfo=timezone.utc)
     target = end_dt.timestamp() - lead_hours * 3600.0
 
-    history = pm.prices_history(market["token_ids"][0], interval="max",
-                                fidelity=fidelity)
+    # Two-step fetch. A tight window around the decision moment works for any
+    # market, however long it lived; if that comes back empty the market was
+    # probably created just before it closed (sports), so fall back to the
+    # rolling window the API serves, which covers roughly the last 15 days.
+    window = 6 * 3600.0
+    history = pm.prices_history(market["token_ids"][0], fidelity=fidelity,
+                                start_ts=target - window, end_ts=target + window)
+    if not history:
+        history = pm.prices_history(market["token_ids"][0], interval="max",
+                                    fidelity=fidelity)
     pick = price_at(history, target)
     if not pick:
         return None
@@ -355,9 +363,16 @@ def run(args):
         log(f"loaded {len(raw)} closed markets from file", args.quiet)
 
     cases = []
+    wanted = {k.strip() for k in args.kinds.split(",")} if args.kinds else None
     for item in raw:
         if len(cases) >= args.max_markets:
             break
+        # Filter by kind BEFORE building a case: the kind comes from local
+        # parsing, while building a case costs a price-history request. Filtering
+        # afterwards meant the cap was filled with sports and only a couple of
+        # judgement markets ever made it through.
+        if wanted and pm.parse_market(item).get("kind") not in wanted:
+            continue
         case = build_case(item, args.lead_hours, args.assumed_spread, args.fidelity,
                           args.quiet)
         if case:
@@ -367,10 +382,6 @@ def run(args):
         log("no usable cases: no closed market had both a price history and an "
             "undecided board at the lead time", args.quiet)
         return 0
-    if args.kinds:
-        wanted = {k.strip() for k in args.kinds.split(",")}
-        cases = [c for c in cases if c.get("kind") in wanted]
-        log(f"{len(cases)} case(s) left after --kinds {args.kinds}", args.quiet)
 
     if args.dry_run:
         print(f"\n  {'id':<9} {'kind':<6} {'price':>7} {'edge>':>6} {'Δh':>5}  question")

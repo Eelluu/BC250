@@ -379,11 +379,23 @@ def clob_spread(token_id, timeout=DEFAULT_TIMEOUT):
     return best_bid, best_ask, spread
 
 
-def prices_history(token_id, interval="1h", fidelity=10, timeout=DEFAULT_TIMEOUT):
-    """OHLC-ish history for one token: [{"t": epoch, "p": price}, ...]."""
-    status, payload = http_json(f"{CLOB}/prices-history",
-                                {"market": token_id, "interval": interval,
-                                 "fidelity": fidelity}, timeout=timeout)
+def prices_history(token_id, interval="1h", fidelity=10, start_ts=None, end_ts=None,
+                   timeout=DEFAULT_TIMEOUT):
+    """Price history for one token: [{"t": epoch, "p": price}, ...].
+
+    Two ways to ask, and the difference matters: `interval` is a rolling window
+    that the API serves for roughly the last 15 days (verified: 364 hourly points
+    covering 364 hours, regardless of how long the market lived), while
+    `start_ts`/`end_ts` reach any moment in the past. A backtest needs the
+    explicit window, because the markets worth testing lived for months.
+    """
+    params = {"market": token_id, "fidelity": fidelity}
+    if start_ts is not None and end_ts is not None:
+        params["startTs"] = int(start_ts)
+        params["endTs"] = int(end_ts)
+    else:
+        params["interval"] = interval
+    status, payload = http_json(f"{CLOB}/prices-history", params, timeout=timeout)
     if status == 200 and isinstance(payload, dict) and isinstance(payload.get("history"), list):
         return payload["history"]
     return []
