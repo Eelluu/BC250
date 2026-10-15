@@ -37,7 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from llm_sanitize import LLM_MODEL, LLM_URL, call_llm, strip_to_json  # noqa: E402
+from llm_sanitize import LLM_MODEL, LLM_URL, strip_to_json  # noqa: E402
 
 DEFAULT_DATA = Path("/opt/netscan/data/markets")
 REQUIRED_KEYS = ("market_id", "p_yes", "resolution_reading", "resolves_yes_if",
@@ -95,8 +95,67 @@ def rules_hash(market):
 # ── The model call (thin wrapper, so the selftest can stub it) ─────────────
 
 
-def _raw_llm(system, user, max_tokens):
-    return call_llm(system, user, temperature=0.2, max_tokens=max_tokens)
+# The raw response of the last call, kept for the rejection dumps: a model that
+# answers in reasoning_content looks identical to one that failed, unless you
+# keep both halves.
+_LAST_RESPONSE = {}
+
+
+def _raw_llm(system, user, max_tokens, think=True):
+    """Call llama-swap directly, rather than through llm_sanitize.call_llm.
+
+    Two reasons, both learned the hard way on this box:
+
+    1. gemma-4-12B is a reasoning model whose chat template honours
+       `chat_template_kwargs: {"enable_thinking": false}`. Measured on the box:
+       the same trivial question costs 6 completion tokens instead of 102, and
+       the answer lands in `content` instead of being buried in
+       `reasoning_content` that the model never finishes. The repo's usual
+       "/nothink" prefix does NOT work for this model (it is a Qwen convention);
+       without a working switch, a real market spent the whole 2500-token budget
+       thinking and then emitted a bare "{".
+    2. call_llm() returns a single string, so a rejection cannot show whether the
+       text arrived in `content` or `reasoning_content`.
+    """
+    import urllib.error
+    import urllib.request
+
+    body = {
+        "model": LLM_MODEL,
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": user}],
+        "temperature": 0.2,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    if not think:
+        body["chat_template_kwargs"] = {"enable_thinking": False}
+
+    _LAST_RESPONSE.clear()
+    _LAST_RESPONSE["think"] = bool(think)
+    req = urllib.request.Request(f"{LLM_URL}/chat/completions",
+                                 data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=900) as resp:
+            payload = json.loads(resp.read())
+    except Exception as ex:  # llama-swap down, model failed to load, HTTP 500...
+        _LAST_RESPONSE.update({"http_error": f"{type(ex).__name__}: {ex}"})
+        return ""
+
+    message = (payload.get("choices") or [{}])[0].get("message", {}) or {}
+    content = message.get("content") or ""
+    reasoning = message.get("reasoning_content") or ""
+    _LAST_RESPONSE.update({
+        "content": content,
+        "reasoning": reasoning,
+        "usage": payload.get("usage") or {},
+        "timings": payload.get("timings") or {},
+        "content_empty": not content.strip(),
+    })
+    # Same courtesy fallback as llm_sanitize: an empty `content` with reasoning
+    # present is not an empty answer, and validation will judge it.
+    return content if content.strip() else reasoning
 
 
 def llm_health(timeout=10):
@@ -168,7 +227,50 @@ def validate_verdict(obj, market):
     return problems
 
 
-def ask_model(market, max_tokens=900, quiet=False, llm=_raw_llm):
+def extract_json(text, prefer_keys=("market_id", "p_yes")):
+    """Parse the JSON object that is actually the verdict, from a model answer.
+
+    A greedy regex (`\\{[\\s\\S]*\\}`, which is what strip_to_json does) is not
+    enough: a reasoning model cheerfully writes an object and then comments on
+    it, or writes a scratch object first and the real answer second, and a
+    greedy match swallows the lot and dies with "Extra data" — which is exactly
+    how the first live run failed.
+
+    So: collect every complete top-level object with json.JSONDecoder.raw_decode
+    (which stops at the end of the first complete value), prefer one carrying
+    the verdict keys, look one level into wrappers like {"verdict": {...}}, and
+    otherwise hand back the first object so validation can explain what is wrong.
+    """
+    cleaned = strip_to_json(text)
+    decoder = json.JSONDecoder()
+    found = []
+    for start, char in enumerate(cleaned):
+        if char != "{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(cleaned[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            found.append(obj)
+
+    if not found:
+        raise json.JSONDecodeError("no complete JSON object found", cleaned or "", 0)
+
+    def looks_like_verdict(value):
+        return isinstance(value, dict) and all(k in value for k in prefer_keys)
+
+    for obj in found:
+        if looks_like_verdict(obj):
+            return obj
+    for obj in found:  # unwrap {"verdict": {...}} / {"analysis": ..., "output": {...}}
+        for value in obj.values():
+            if looks_like_verdict(value):
+                return value
+    return found[0]
+
+
+def ask_model(market, max_tokens=2500, quiet=False, llm=_raw_llm, think=True):
     """One market -> (verdict_dict, meta) or (None, meta).
 
     One repair attempt: models routinely emit near-JSON, and a second, pointed
@@ -177,21 +279,24 @@ def ask_model(market, max_tokens=900, quiet=False, llm=_raw_llm):
     """
     user = build_prompt(market)
     meta = {"asked_at": now_iso(), "repaired": False, "latency_s": None,
-            "error": None, "raw_chars": 0}
+            "error": None, "raw_chars": 0, "raw": ""}
 
     for attempt in (1, 2):
         t0 = time.time()
         raw = llm(SYSTEM, user if attempt == 1 else user + "\n\n" + meta["repair_hint"],
-                  max_tokens)
+                  max_tokens, think)
         meta["latency_s"] = round(time.time() - t0, 1)
         meta["raw_chars"] = len(raw or "")
+        meta["raw"] = (raw or "")[:6000]
+        meta["response"] = dict(_LAST_RESPONSE)
         if not raw:
-            meta["error"] = "empty model output"
+            meta["error"] = ("empty model output — a reasoning model that runs out "
+                             "of tokens while thinking returns nothing; raise "
+                             "--max-tokens (or use --no-think)")
             return None, meta
 
-        payload = strip_to_json(raw)
         try:
-            obj = json.loads(payload)
+            obj = extract_json(raw)
         except json.JSONDecodeError as ex:
             meta["repair_hint"] = (f"Your previous answer was not valid JSON ({ex}). "
                                    "Return only the JSON object, nothing else.")
@@ -374,7 +479,7 @@ def selftest():
     # 3. Broken JSON triggers exactly one repair attempt, then succeeds.
     calls = []
 
-    def flaky(system, user, max_tokens):
+    def flaky(system, user, max_tokens, think=True):
         calls.append(user)
         return "{not json at all" if len(calls) == 1 else STUB_GOOD
 
@@ -397,7 +502,22 @@ def selftest():
     ok &= any("missing key" in p for p in problems)
     print(f"  sparse object   -> {len(problems)} validation problems")
 
-    # 6. Selection: priority + skips.
+    # 6. JSON extraction: a reasoning model writes the object and then keeps
+    # talking, or writes a scratch object first — both killed the first live run.
+    trailing = "Here is my answer:\n" + STUB_GOOD + "\n\nI hope that helps. Note that " \
+               "the deadline may slip, so treat 0.30 as approximate."
+    two_objects = '{"thought": "let me think"}\n' + STUB_GOOD
+    nested = '{"analysis": {"note": "thinking"}, "verdict": ' + STUB_GOOD + '}'
+    checks = {"trailing prose": extract_json(trailing),
+              "scratch object first": extract_json(two_objects),
+              "wrapped in a dict": extract_json(nested)}
+    for label, obj in checks.items():
+        good = obj.get("p_yes") == 0.30 and obj.get("market_id") == "900002"
+        ok &= good
+        print(f"  json extraction -> {label:<21} {'OK' if good else 'FAIL'} "
+              f"(p_yes={obj.get('p_yes')})")
+
+    # 7. Selection: priority + skips.
     markets = [dict(market, id="1", kind="feed", liquidity=90000),
                dict(market, id="2", kind="fuzzy", liquidity=1000),
                dict(market, id="3", kind="event", liquidity=5000),
@@ -476,10 +596,31 @@ def run(args):
             log(f"runtime cap reached after {i - 1} markets "
                 f"({elapsed / 60:.1f} min) — stopping cleanly", args.quiet)
             break
-        verdict, meta = ask_model(market, max_tokens=args.max_tokens, quiet=args.quiet)
+        verdict, meta = ask_model(market, max_tokens=args.max_tokens,
+                                  quiet=args.quiet, think=args.think)
         if verdict is None:
             failures += 1
             log(f"[{i}/{len(picked)}] {market['id']} REJECTED: {meta['error']}", args.quiet)
+            if meta.get("raw"):
+                # Keep what the model actually said, split into the half that
+                # answered and the half that thought. Rejections are the only
+                # way to see this model's real failure modes, and guessing at
+                # them from an error string wastes whole evenings.
+                dump_dir = Path(args.data_dir) / "rejected"
+                dump_dir.mkdir(parents=True, exist_ok=True)
+                resp = meta.get("response") or {}
+                stamp = meta["asked_at"].replace(":", "")
+                (dump_dir / f"{market['id']}-{stamp}.txt").write_text(
+                    f"# error: {meta['error']}\n"
+                    f"# market: {market.get('question')}\n"
+                    f"# asked_at: {meta['asked_at']}  model: {LLM_MODEL}  "
+                    f"think: {resp.get('think')}  repaired: {meta['repaired']}  "
+                    f"latency_s: {meta['latency_s']}  usage: {json.dumps(resp.get('usage') or {})}\n"
+                    f"# http_error: {resp.get('http_error')}\n"
+                    f"# content ({len(resp.get('content') or '')} chars):\n"
+                    f"{(resp.get('content') or meta.get('raw', ''))[:6000]}\n"
+                    f"# reasoning ({len(resp.get('reasoning') or '')} chars):\n"
+                    f"{(resp.get('reasoning') or '')[:3000]}\n", encoding="utf-8")
             continue
         records.append({
             "market_id": market["id"],
@@ -513,6 +654,39 @@ def run(args):
     return 0
 
 
+def probe(max_tokens=64, think=False):
+    """Ask the model something trivial and show the RAW split.
+
+    Worth having on this box specifically: the chat model is a *reasoning*
+    model, so an answer can arrive in `reasoning_content` while `content` stays
+    empty — and when the token budget runs out mid-thought, `content` can hold a
+    single "{". That is invisible through call_llm()'s single return value, and
+    it is exactly how the first live runs failed.
+    """
+    t0 = time.time()
+    text = _raw_llm("You are terse.", "Reply with the single word OK", max_tokens, think)
+    elapsed = time.time() - t0
+    resp = dict(_LAST_RESPONSE)
+    usage = resp.get("usage") or {}
+    timings = resp.get("timings") or {}
+    print(f"  model      : {LLM_MODEL}  (think={think})")
+    print(f"  latency    : {elapsed:.1f}s   completion_tokens={usage.get('completion_tokens')}")
+    if timings.get("predicted_per_second"):
+        print(f"  speed      : {timings['predicted_per_second']:.1f} tok/s   "
+              f"draft accepted: {timings.get('draft_n_accepted')}/{timings.get('draft_n')}")
+    if resp.get("http_error"):
+        print(f"  http error : {resp['http_error']}")
+        return 1
+    print(f"  content    : {(resp.get('content') or '')[:200]!r}")
+    reasoning = resp.get("reasoning") or ""
+    print(f"  reasoning  : {reasoning[:120]!r}{'...' if len(reasoning) > 120 else ''}")
+    print(f"  returned   : {text[:80]!r}")
+    if resp.get("content_empty") and reasoning:
+        print("  >> text arrived only in reasoning_content: pass --max-tokens 6000+ "
+              "to let it finish, or keep thinking off (the default)")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="LLM analyst for prediction markets")
     ap.add_argument("--data-dir", default=str(DEFAULT_DATA))
@@ -520,7 +694,16 @@ def main(argv=None):
     ap.add_argument("--max-markets", type=int, default=60)
     ap.add_argument("--max-runtime", type=float, default=5400.0,
                     help="hard stop in seconds (default 1.5 h, the night budget)")
-    ap.add_argument("--max-tokens", type=int, default=900)
+    ap.add_argument("--max-tokens", type=int, default=2500,
+                    help="answer budget; a reasoning model needs room to think "
+                         "before it writes the JSON")
+    ap.add_argument("--think", action="store_true",
+                    help="keep the chain of thought. Measured on this box: with "
+                         "--max-tokens 2500 the model spent the entire budget "
+                         "thinking and emitted no JSON at all, so this is off by "
+                         "default and wants 6000+ tokens when enabled")
+    ap.add_argument("--probe", action="store_true",
+                    help="one trivial call, show the raw response and exit")
     ap.add_argument("--kinds", help="feed,event,fuzzy (default: all, fuzzy first)")
     ap.add_argument("--min-hours", type=float, default=2.0,
                     help="skip markets closing sooner than this")
@@ -533,6 +716,8 @@ def main(argv=None):
 
     if args.selftest:
         return selftest()
+    if args.probe:
+        return probe()
     return run(args)
 
 

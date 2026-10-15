@@ -48,6 +48,7 @@ from polymarket import (  # noqa: E402
     geoblock,
     iter_markets,
     parse_market,
+    resolve_overrides,
 )
 
 DEFAULT_OUT = Path(os.environ.get("MARKET_DATA") or "/opt/netscan/data/markets")
@@ -358,6 +359,10 @@ def collect(args):
         log(f"gamma: {len(raw_markets)} raw markets", args.quiet)
 
     kinds = tuple(k.strip() for k in args.kinds.split(",")) if args.kinds else None
+    if pins := resolve_overrides():
+        meta["source"]["resolve_overrides"] = pins
+        log("DNS pinned (carrier workaround): "
+            + ", ".join(f"{h} -> {ip}" for h, ip in pins.items()), args.quiet)
     chosen, skipped = select_markets(
         raw_markets, min_volume=args.min_volume, min_liquidity=args.min_liquidity,
         hours_max=args.hours_max, kinds=kinds,

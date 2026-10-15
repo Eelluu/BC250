@@ -15,7 +15,6 @@ Usage:
 import os
 import re
 import json
-import time
 import urllib.request
 import urllib.parse
 
@@ -44,17 +43,24 @@ def call_llm(system_prompt: str, user_prompt: str, temperature: float = 0.3, max
             f"{LLM_URL}/chat/completions", data=payload,
             headers={"Content-Type": "application/json"},
         )
-        t0 = time.time()
         # High timeout for long analysis tasks
         with urllib.request.urlopen(req, timeout=900) as resp:
             result = json.loads(resp.read())
         
-        elapsed = time.time() - t0
         content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        # Reasoning models can leave `content` empty while still thinking and put
+        # the text in `reasoning_content` instead (seen on gemma-4-12B when the
+        # token budget runs out mid-thought). Returning "" there throws away an
+        # answer that does exist, so fall back to it.
+        if not (content or "").strip():
+            message = result.get("choices", [{}])[0].get("message", {}) or {}
+            reasoning = message.get("reasoning_content") or ""
+            if reasoning.strip():
+                content = reasoning
         # log is not defined here, using print
         # print(f"  [llm_util] LLM: {elapsed:.0f}s")
         return content
-    except Exception as ex:
+    except Exception:
         # print(f"  [llm_util] LLM failed: {ex}")
         return ""
 

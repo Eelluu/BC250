@@ -36,7 +36,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import socket
 import sys
 import time
 import urllib.error
@@ -55,6 +57,53 @@ UA = "bc250-market/1.0 (+read-only; https://github.com/Eelluu/BC250)"
 DEFAULT_TIMEOUT = 25
 DEFAULT_RETRIES = 3
 
+# ── Carrier workaround: pin a host to a working IP (opt-in) ────────────────
+#
+#   MARKET_RESOLVE="gamma-api.polymarket.com=104.18.0.1,clob.polymarket.com=104.18.0.1"
+#
+# Why this exists, in one line: some networks reset the TLS connection to the
+# *specific* Cloudflare anycast IPs that public DNS returns for these hosts,
+# while other Cloudflare IPs serve the very same host fine — verified with the
+# same SNI against six Cloudflare IPs, four of which answered HTTP 200. So this
+# is a network workaround, not an API trick; it is announced on stderr, recorded
+# in every snapshot, and every call falls back to DNS automatically if the
+# pinned IP stops answering. TLS/SNI and the Host header still use the real
+# hostname: only the address the socket dials changes.
+_RESOLVE = {}
+_REAL_GETADDRINFO = socket.getaddrinfo
+
+
+def _pinned_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    return _REAL_GETADDRINFO(_RESOLVE.get(host, host), port, family, type, proto, flags)
+
+
+def resolve_overrides():
+    """The active host->IP pins (empty dict when running through normal DNS)."""
+    return dict(_RESOLVE)
+
+
+def install_resolve(spec):
+    """Parse "host=ip,host=ip" and pin those names. Returns the active mapping."""
+    for item in (spec or "").split(","):
+        if "=" not in item:
+            continue
+        host, ip = (part.strip() for part in item.split("=", 1))
+        if host and ip:
+            _RESOLVE[host] = ip
+    if _RESOLVE:
+        socket.getaddrinfo = _pinned_getaddrinfo
+        print("  [polymarket] DNS pinned: "
+              + ", ".join(f"{h} -> {ip}" for h, ip in _RESOLVE.items()), file=sys.stderr)
+    return dict(_RESOLVE)
+
+
+def _uninstall_resolve():
+    _RESOLVE.clear()
+    socket.getaddrinfo = _REAL_GETADDRINFO
+
+
+install_resolve(os.environ.get("MARKET_RESOLVE", ""))
+
 # ── HTTP ───────────────────────────────────────────────────────────────────
 
 
@@ -62,7 +111,7 @@ def _headers():
     return {"User-Agent": UA, "Accept": "application/json"}
 
 
-def _do(req, timeout, retries):
+def _do(req, timeout, retries, allow_fallback=True):
     """Perform a request with bounded retries on 429/5xx and transport errors.
 
     Never raises for an HTTP status: returns (status, payload_or_error_dict) so
@@ -89,6 +138,14 @@ def _do(req, timeout, retries):
             if attempt < retries - 1:
                 time.sleep(2 ** attempt)
                 continue
+    # A pinned IP can go stale (anycast moves, filters lift). Try once more the
+    # ordinary way instead of failing the run: _uninstall_resolve makes the
+    # recursion below a plain DNS attempt.
+    if allow_fallback and _RESOLVE:
+        print(f"  [polymarket] pinned IP failed for {req.full_url} — retrying via DNS",
+              file=sys.stderr)
+        _uninstall_resolve()
+        return _do(req, timeout, retries, allow_fallback=False)
     return 0, last or {"_error": "unreachable", "_url": req.full_url}
 
 
@@ -232,14 +289,16 @@ def clob_midpoint(token_id, timeout=DEFAULT_TIMEOUT):
 def clob_midpoints(token_ids, timeout=DEFAULT_TIMEOUT):
     """Bulk midpoints: one request for the whole page -> {token_id: float}.
 
-    GET /midpoints takes a comma-separated list; the collector prices a batch
-    instead of hammering the API once per market (shared uplink on this box).
+    POST with a body, not the documented GET: the live API answers
+    {"error":"Invalid payload"} to GET /midpoints?token_ids=... while POST with
+    [{"token_id": ...}] returns the map correctly (verified against production).
+    A GET per token would be 100x the requests for the same answer.
     """
     ids = [str(t) for t in token_ids if t]
     if not ids:
         return {}
-    status, payload = http_json(f"{CLOB}/midpoints",
-                                {"token_ids": ",".join(ids)}, timeout=timeout)
+    status, payload = http_json_post(f"{CLOB}/midpoints",
+                                     [{"token_id": t} for t in ids], timeout=timeout)
     if status != 200 or not isinstance(payload, dict):
         return {}
     return {str(k): float(v) for k, v in payload.items() if _isnum(v)}
@@ -258,12 +317,15 @@ def clob_spreads(token_ids, timeout=DEFAULT_TIMEOUT):
 
 
 def clob_last_trades(token_ids, timeout=DEFAULT_TIMEOUT):
-    """Bulk last trade prices -> {token_id: {"price": float, "side": str}}."""
+    """Bulk last trade prices -> {token_id: {"price": float, "side": str}}.
+
+    POST for the same reason as clob_midpoints: GET answers "Invalid payload".
+    """
     ids = [str(t) for t in token_ids if t]
     if not ids:
         return {}
-    status, payload = http_json(f"{CLOB}/last-trades-prices",
-                                {"token_ids": ",".join(ids)}, timeout=timeout)
+    status, payload = http_json_post(f"{CLOB}/last-trades-prices",
+                                     [{"token_id": t} for t in ids], timeout=timeout)
     out = {}
     if status == 200 and isinstance(payload, list):
         for row in payload:
@@ -421,7 +483,7 @@ def parse_market(raw):
         "uma_status": raw.get("umaResolutionStatus"),
         "tick_size": _f(raw.get("orderPriceMinTickSize")),
         "min_size": _f(raw.get("orderMinSize")),
-        "fee_bps": market_fee_bps(raw),
+        "fee_bps": market_fee_bps(raw, price_yes),
         "tags": tags,
         "event_title": event.get("title"),
         "event_slug": event_slug,
@@ -433,23 +495,34 @@ def parse_market(raw):
     return market
 
 
-def market_fee_bps(raw):
-    """Best-effort taker fee in basis points.
+def market_fee_bps(raw, price=None):
+    """Taker fee in basis points for this market, per the documented formula.
 
-    Most Polymarket markets charge no trading fee (0 bps) and the field is
-    absent; some sports markets carry a `feeSchedule`. `takerBaseFee` /
-    `makerBaseFee` are kept for the record because their units are not
-    documented consistently, so the strategy must not depend on them alone.
+        fee (USDC per share) = feeRate x p x (1 - p)
+
+    That is the formula published at docs.polymarket.com/trading/fees: the fee
+    peaks at 50% probability, is symmetric either side of it, and only takers
+    pay. It matters a lot here — reading `rate` as a flat percentage would
+    overstate the cost of entering at p=0.675 by roughly 4.5x, and the cost
+    model is the whole point of this pipeline. Geopolitical and world-events
+    markets are fee-free and simply carry no feeSchedule.
+
+    One share pays 1 USDC, so a fee expressed in USDC per share is numerically
+    the same as a fee in probability units — exactly what edge_required() adds.
     """
     sched = raw.get("feeSchedule")
-    if isinstance(sched, dict) and _isnum(sched.get("rate")):
-        # `rate` is documented as a decimal rate, not bps, on the fee schedule.
-        return round(_f(sched.get("rate")) * 10000.0, 4)
-    for key in ("takerBaseFee", "fee"):
-        if _isnum(raw.get(key)):
-            val = _f(raw.get(key))
-            return round(val * 10000.0, 4) if val <= 1 else round(val, 4)
-    return 0.0
+    if not (isinstance(sched, dict) and _isnum(sched.get("rate"))):
+        return 0.0
+    rate = _f(sched.get("rate"), 0.0)
+    exponent = _f(sched.get("exponent"), 1.0) or 1.0
+
+    p = _f(price)
+    if p is None:
+        prices = [_f(x) for x in _parse_json_field(raw.get("outcomePrices"))]
+        p = prices[0] if prices and prices[0] is not None else 0.5
+    p = min(max(p, 0.0), 1.0)
+
+    return round(rate * (p * (1.0 - p)) ** exponent * 10000.0, 4)
 
 
 # Markers for a market whose truth is a NUMBER that a feed publishes. Matched
@@ -538,10 +611,12 @@ DEFAULT_EDGE_BPS = 200.0
 def edge_required(market, slippage_bps=DEFAULT_SLIPPAGE_BPS, min_edge_bps=DEFAULT_EDGE_BPS):
     """Edge (in probability units) a bet must clear to be worth paper-trading.
 
-    Half the quoted spread + taker fee + an explicit slippage allowance +
-    a floor. This is the honest cost of trading a thin book, and it is what
-    turns "the model says 0.70 and the market says 0.62" into "that is not an
-    edge, that is noise plus spread".
+    Half the quoted spread + the taker fee + an explicit slippage allowance +
+    a floor. The fee comes from market_fee_bps(), which follows the published
+    formula (a function of price, not a flat rate). This is the honest cost of
+    trading a thin book, and it is what turns "the model says 0.70 and the
+    market says 0.62" into "that is not an edge, that is noise plus spread and
+    fee".
     """
     half_spread = 0.0
     spread = market.get("spread")
@@ -569,6 +644,7 @@ FIXTURE = [
         "spread": 0.02, "bestBid": 0.51, "bestAsk": 0.53, "active": True,
         "closed": False, "acceptingOrders": True, "enableOrderBook": True,
         "negRisk": False, "orderPriceMinTickSize": 0.01, "orderMinSize": 5,
+        "feeSchedule": {"rate": 0.07, "exponent": 1, "takerOnly": True},
         "tags": [{"label": "Crypto"}, {"label": "Bitcoin"}],
         "events": [{"slug": "bitcoin-up-or-down-oct-15", "title": "Bitcoin Up or Down"}],
     },
@@ -638,6 +714,28 @@ def selftest():
           f"(want: does not clear)")
     print(f"    cost model: feed market need {feed['edge_required']} < fuzzy "
           f"{need} (tighter book, lower bar)")
+
+    # Fee model: the published formula is fee = feeRate x p x (1 - p), NOT a
+    # flat rate. Crypto is 0.07, so p=0.52 gives 174.7 bps — reading 0.07 as a
+    # flat percentage would have said 700 bps and doubled the required edge.
+    want = 0.07 * 0.52 * 0.48 * 10000.0
+    ok &= abs(feed["fee_bps"] - want) < 1.0
+    ok &= fuzzy["fee_bps"] == 0.0
+    print(f"    fee model: crypto p=0.52 -> {feed['fee_bps']} bps "
+          f"(formula {want:.1f}); no feeSchedule -> {fuzzy['fee_bps']} bps")
+
+    # Resolve override: pin a host, confirm the socket path uses it, unpin.
+    install_resolve("gamma-api.polymarket.com=104.18.0.1")
+    try:
+        pinned = socket.getaddrinfo("gamma-api.polymarket.com", 443,
+                                    type=socket.SOCK_STREAM)[0][4][0]
+    except OSError as ex:
+        pinned = f"error: {ex}"
+    ok &= pinned == "104.18.0.1"
+    print(f"    resolve override: gamma-api -> {pinned} (want 104.18.0.1)")
+    _uninstall_resolve()
+    ok &= resolve_overrides() == {}
+    print(f"    resolve override cleared: {resolve_overrides()} (want {{}})")
 
     # Geoblock parsing with a stubbed payload (network is optional here).
     print("  geoblock shape: {\"blocked\": bool, \"country\": str, ...} — "
