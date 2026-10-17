@@ -38,9 +38,16 @@ GPU_MHZ=$(grep '\*' "$GPU_CARD/device/pp_dpm_sclk" 2>/dev/null \
 TEMP_MC=$(cat "$GPU_HWMON/temp1_input" 2>/dev/null || echo "0")
 TEMP_C=$(( TEMP_MC / 1000 ))
 
-# Throttle status from gpu_metrics binary (v2.2, offset 108, uint32 LE)
+# Throttle status from gpu_metrics (v2.2, offset 108, uint32 LE).
+# OFF by default, deliberately. Reading gpu_metrics is a GPU register read via the
+# SMU, and this board already carries "GFXOFF disabled to prevent GPU power-state
+# hangs" in dmesg. When the box hung, Discord and ssh went silent in the same breath,
+# and a sysfs read that blocks inside the kernel cannot be killed by any timeout —
+# so the cheap habit is not to make the read at all. The clock and temperature below
+# come from plain text files, which is what every monitoring tool reads and is safe.
+# Set GPU_READ_METRICS=1 in .env to bring this back.
 THROTTLE="0"
-if [ -r "$GPU_CARD/device/gpu_metrics" ]; then
+if [[ "${GPU_READ_METRICS:-0}" == "1" && -r "$GPU_CARD/device/gpu_metrics" ]]; then
     THROTTLE=$(python3 -c "
 import struct, sys
 d = open(sys.argv[1],'rb').read()
