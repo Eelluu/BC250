@@ -3335,6 +3335,22 @@ def save_state(state):
 # err on.
 _REPORT_DIGESTS = {}
 
+# Noise that changes on every single run: log stamps ([00:10:16]) and dated
+# filenames (watchdog-20261018-0020.json). Left in, no two reports would ever
+# compare equal and dedupe would silently do nothing at all.
+_REPORT_NOISE = re.compile(
+    r"\[[^\]]{0,60}\]"          # [00:10:16]
+    r"|\d{8}[-_]\d{4}"          # watchdog-20261018-0020
+    r"|\d{4}-\d{2}-\d{2}"       # 2026-10-18
+    r"|\b\d{8}\b"               # 20261018
+)
+
+
+def _report_digest(msg):
+    """Digest of a report with per-run noise removed, for report.dedupe."""
+    norm = re.sub(r"\s+", " ", _REPORT_NOISE.sub(" ", msg)).strip()
+    return hashlib.sha1(norm.encode("utf-8", "replace")).hexdigest()
+
 
 def _job_output_tail(res, lines=15, limit=1800):
     """Last lines of a job's stdout+stderr, for a report or an error notice."""
@@ -3404,15 +3420,18 @@ def _maybe_send_report(name, job, res=None):
 
     # Optional dedupe: skip a report identical to the last one sent for this job,
     # so a persisting condition (3 criticals that are still 3 criticals) is
-    # announced once rather than every cycle.
+    # announced once rather than every cycle. Compared on the de-noised text, so
+    # a new timestamp does not count as news.
+    digest = None
     if report.get("dedupe"):
-        digest = hashlib.sha1(msg.encode("utf-8", "replace")).hexdigest()
+        digest = _report_digest(msg)
         if _REPORT_DIGESTS.get(name) == digest:
             log(f"  📄 Report for {name} unchanged since last time — not repeated")
             return
-        _REPORT_DIGESTS[name] = digest
 
     if _dm_owner(msg):
+        if digest is not None:
+            _REPORT_DIGESTS[name] = digest
         log(f"  📨 Report sent to owner: {name} ({len(msg)} chars)")
     else:
         log(f"  ⚠️ Could not DM report for {name} (Discord unavailable?)")
