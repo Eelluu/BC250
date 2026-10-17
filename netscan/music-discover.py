@@ -116,8 +116,8 @@ def run_search(query, runner=subprocess.run, timeout=DDGR_TIMEOUT_S):
 
 
 def search_searxng(query, base=SEARXNG_URL, time_range=None, limit=DDGR_MAX_RESULTS,
-                   opener=None, timeout=SEARXNG_TIMEOUT_S):
-    """Ask the local SearXNG for JSON. Returns [{title,url,abstract}, ...] or None.
+                   pages=1, opener=None, timeout=SEARXNG_TIMEOUT_S):
+    """Ask the local SearXNG for JSON. Returns [{title,url,type,abstract}, ...] or None.
 
     The reason this exists: ddgr gets throttled (HTTP 202) and there is nothing to
     do about it from the client side. SearXNG aggregates several engines, so one
@@ -125,40 +125,87 @@ def search_searxng(query, base=SEARXNG_URL, time_range=None, limit=DDGR_MAX_RESU
     20 results from google cse while brave is "Suspended: too many requests" and
     duckduckgo answers with a CAPTCHA.
 
+    Each result is tagged with `type` (track / profile / set), because that is the
+    measured bottleneck: of those 20 results only 8 were individual tracks — 7 were
+    artist pages and 5 were playlists, since a query that demands licence wording
+    attracts exactly the pages that mention licence wording. The model gets the
+    tag and is told not to pick a playlist.
+
     `time_range` is off by default, and that is a measurement rather than a
-    preference: with site:soundcloud.com, week returns 0 results and month
-    returns 2, while year or no filter return the same 20 (all older than a
-    month). A web index simply does not have this week's uploads for a query that
-    narrow, so claiming "this week" would be a lie the report tells.
+    preference: with site:soundcloud.com, week returns 0 results and month returns
+    2, while year or no filter return the same 20 (all older than a month).
 
-    `opener` is injectable so the parsing and the failure modes are testable
-    without a running service.
+    `opener` is injectable so the parsing, the pagination and the failure modes are
+    testable without a running service.
     """
-    params = {"q": query, "format": "json"}
-    if time_range:
-        params["time_range"] = time_range
-    url = f"{base.rstrip('/')}/search?{urllib.parse.urlencode(params)}"
     opener = opener or urllib.request.urlopen
-    try:
-        with opener(url, timeout=timeout) as resp:
-            payload = json.loads(resp.read())
-    except Exception as ex:
-        log(f"searxng failed: {type(ex).__name__}: {ex}")
+    seen, out, page = set(), [], 1
+    while page <= max(1, pages):
+        params = {"q": query, "format": "json", "pageno": page}
+        if time_range:
+            params["time_range"] = time_range
+        url = f"{base.rstrip('/')}/search?{urllib.parse.urlencode(params)}"
+        try:
+            with opener(url, timeout=timeout) as resp:
+                payload = json.loads(resp.read())
+        except Exception as ex:
+            log(f"searxng page {page} failed: {type(ex).__name__}: {ex}")
+            break
+        results = payload.get("results") if isinstance(payload, dict) else None
+        if not isinstance(results, list):
+            log(f"searxng page {page} answered without a results list")
+            break
+        fresh = 0
+        for r in results:
+            if not isinstance(r, dict) or not r.get("url") or r["url"] in seen:
+                continue
+            seen.add(r["url"])
+            out.append({"title": r.get("title"), "url": r["url"],
+                        "type": download_kind(r["url"]),
+                        "abstract": (r.get("content") or "")[:400]})
+            fresh += 1
+        log(f"searxng page {page}: {len(results)} results, {fresh} new")
+        if not fresh:  # engines have run out, or are repeating themselves
+            break
+        if limit and len(out) >= limit:
+            break
+        page += 1
+
+    if not out:
         return None
-    results = payload.get("results") if isinstance(payload, dict) else None
-    if not isinstance(results, list):
-        log("searxng answered without a results list")
-        return None
-    out = [{"title": r.get("title"),
-            "url": r.get("url"),
-            "abstract": (r.get("content") or "")[:400]}
-           for r in results if isinstance(r, dict) and r.get("url")]
-    log(f"searxng: {len(out)} result(s) from {len(results)} raw")
-    return out[:limit] or None
+    tracks = sum(1 for r in out if r["type"] == "track")
+    log(f"searxng: {len(out)} unique result(s), {tracks} of them individual tracks")
+    return out[:limit] if limit else out
 
 
-SYSTEM_PROMPT = f"""You are a professional music copyright attorney and YouTube curator.
-Review the following search results for {GENRE} tracks uploaded this week.
+SUBGENRE_RULE = """SUBGENRE COHERENCE (IMPORTANT):
+- Pick ONE subgenre of {genre} for this week's report (e.g. Deep House,
+  Tech House, Melodic House, Afro House, Progressive House).
+- EVERY track in the output array must belong to that SAME subgenre.
+- Set the 'genre' field to that exact subgenre on every track.
+- If no single subgenre has at least ~4 tracks, pick the one with the most
+  tracks and only include those."""
+
+WIDE_RULE = """SUBGENRES:
+- This report is a varied mix on purpose: include tracks from any house
+  subgenre (Deep House, Tech House, Melodic House, Afro House, Progressive
+  House, Tropical House...).
+- Set the 'genre' field on each track to that track's own subgenre."""
+
+
+def build_prompt(genre=GENRE, mix="coherent"):
+    """The curation prompt, in one of two shapes.
+
+    `coherent` (the default, and the behaviour this job shipped with) asks for a
+    single subgenre and keeps only it, which caps the report at whatever the
+    biggest subgenre can muster. Measured on a pool of 26 individual tracks with
+    22 mentioning licence wording, that cap is what turns ~15 usable tracks into
+    3: the model picks the largest subgenre and drops the rest by instruction, not
+    by judgement. `wide` drops the cap and keeps the same strict licence filter.
+    """
+    rule = WIDE_RULE if mix == "wide" else SUBGENRE_RULE.format(genre=genre)
+    return f"""You are a professional music copyright attorney and YouTube curator.
+Review the following search results for {genre} tracks uploaded this week.
 GOAL: Find ONLY tracks that are 100% safe for YouTube Monetization (Ads).
 
 STRICT CRITERIA:
@@ -167,15 +214,18 @@ STRICT CRITERIA:
 3. Discard ANY track that is 'Personal Use Only' or has 'No Derivatives'.
 4. Discard ANY track where monetization safety is not 'High'.
 
-SUBGENRE COHERENCE (IMPORTANT):
-- Pick ONE subgenre of {GENRE} for this week's report (e.g. Deep House,
-  Tech House, Melodic House, Afro House, Progressive House).
-- EVERY track in the output array must belong to that SAME subgenre.
-- Set the 'genre' field to that exact subgenre on every track.
-- If no single subgenre has at least ~4 tracks, pick the one with the most
-  tracks and only include those.
+{rule}
 
 Output ONLY a valid JSON array of objects. ONLY include tracks with HIGH monetization safety.
+
+RESULT TYPES: every search result carries a "type" field.
+  track   = an individual track page — the only thing you may pick
+  profile = an artist or label page, not a track
+  set     = a playlist, not a track
+A playlist whose title says "no copyright" is not a licence for the tracks inside
+it, and a profile page has no licence at all. Skip both.
+
+Each object must be:
 {{
   "artist": "...",
   "title": "...",
@@ -183,9 +233,12 @@ Output ONLY a valid JSON array of objects. ONLY include tracks with HIGH monetiz
   "license_type": "CC-BY / Royalty Free",
   "monetization_safety": "High",
   "reason": "Explain why this is safe for ads.",
-  "genre": "Exact subgenre, shared by ALL tracks in the array"
+  "genre": "This track's subgenre"
 }}
 If no 100% safe tracks are found, return []."""
+
+
+SYSTEM_PROMPT = build_prompt()
 
 
 def track_list(value):
@@ -206,15 +259,17 @@ def track_list(value):
     return None
 
 
-def curate(results, llm=call_llm, data_dir=DATA_DIR):
+def curate(results, llm=call_llm, data_dir=DATA_DIR, mix="coherent"):
     """Ask the model to filter the candidates. Returns (tracks, genre) or (None, None).
 
-    () with an empty list means "nothing safe this week", which is a valid
-    answer; None means the model's reply could not be used at all.
+    An empty list means "nothing safe this week", which is a valid answer; None
+    means the model's reply could not be used at all. `mix` picks the prompt: the
+    coherence filter is only applied for "coherent", because in "wide" mode every
+    subgenre is wanted.
     """
     user_prompt = f"Search Results:\n{json.dumps(results, indent=2)}"
-    raw_reply = llm(SYSTEM_PROMPT, user_prompt, temperature=0.2, max_tokens=4000,
-                    think=False)
+    raw_reply = llm(build_prompt(GENRE, mix), user_prompt, temperature=0.2,
+                    max_tokens=4000, think=False)
     if not (raw_reply or "").strip():
         log("the model returned nothing (empty content)")
         return None, None
@@ -231,6 +286,8 @@ def curate(results, llm=call_llm, data_dir=DATA_DIR):
         log(f"the model returned JSON that is not a track list — saved to {path}")
         return None, None
     tracks = [t for t in tracks if isinstance(t, dict)]
+    if mix == "wide":
+        return tracks, f"{GENRE} (mix)"
     genre_label, tracks = pick_dominant_genre(tracks)
     return tracks, genre_label
 
@@ -364,7 +421,7 @@ def write_report(tracks, genre_label=None, data_dir=DATA_DIR):
 
 def search_tracks(data_dir=DATA_DIR, runner=subprocess.run, llm=call_llm,
                   source="auto", searxng_url=SEARXNG_URL, opener=None,
-                  time_range=""):
+                  time_range="", pages=2, max_candidates=40, mix="coherent"):
     """One weekly run. Returns the list of tracks (possibly empty) or None.
 
     `source`: auto tries SearXNG first and falls back to ddgr; "searxng" and
@@ -380,7 +437,8 @@ def search_tracks(data_dir=DATA_DIR, runner=subprocess.run, llm=call_llm,
         print(f"  Searching SearXNG ({searxng_url}) for: {search_terms(genre)}"
               f"{f' [time_range={time_range}]' if time_range else ''}")
         results = search_searxng(search_terms(genre), base=searxng_url,
-                                 opener=opener, time_range=time_range)
+                                 opener=opener, time_range=time_range,
+                                 pages=pages, limit=max_candidates)
     if results is None and source in ("auto", "ddgr"):
         query = build_query(genre)
         print(f"  Searching ddgr for: {query}")
@@ -389,7 +447,7 @@ def search_tracks(data_dir=DATA_DIR, runner=subprocess.run, llm=call_llm,
         return None
 
     print(f"  Analyzing {len(results)} candidates for MONETIZATION...")
-    tracks, genre_label = curate(results, llm=llm, data_dir=data_dir)
+    tracks, genre_label = curate(results, llm=llm, data_dir=data_dir, mix=mix)
     if tracks is None:
         print("❌ The model's curation could not be used (raw reply kept).")
         return None
@@ -521,6 +579,16 @@ def selftest():
           f"{'' if not bad else ' FAIL ' + str(bad)}; playlist kept out of the "
           f"yt-dlp command, still listed as a lead")
 
+    # 2c. The mix knob: coherent caps the report to one subgenre, wide does not.
+    # This is the measured reason a pool of 26 tracks became a report of 3.
+    ok &= "SAME subgenre" in build_prompt(GENRE, "coherent")
+    ok &= "SAME subgenre" not in build_prompt(GENRE, "wide")
+    wide_tracks, wide_genre = curate(rows, llm=lambda *a, **k: good_reply,
+                                     data_dir=tmp, mix="wide")
+    ok &= len(wide_tracks) == 3 and "mix" in wide_genre
+    print(f"  mix knob        -> coherent keeps the majority of 3 (2), wide keeps "
+          f"all {len(wide_tracks)} as '{wide_genre}'")
+
     # 3. Coherence: a clear majority filters, a thin field does not.
     many = ([{"genre": "Deep House"}] * 3) + [{"genre": "Tech House"}]
     label, kept = pick_dominant_genre(many)
@@ -569,6 +637,13 @@ def main(argv=None):
                          "month returns 2, while the full set (20) is all older "
                          "than a month: a web index does not have this week's "
                          "uploads for a query this narrow")
+    ap.add_argument("--pages", type=int, default=2,
+                    help="search result pages to pull and merge")
+    ap.add_argument("--max-candidates", type=int, default=40)
+    ap.add_argument("--mix", choices=("coherent", "wide"), default="coherent",
+                    help="coherent = one subgenre, as this job has always done "
+                         "(and the reason a pool of 26 tracks yields 3); wide = "
+                         "keep any house subgenre, same strict licence filter")
     ap.add_argument("--selftest", action="store_true",
                     help="offline checks: ddgr and SearXNG fixtures, stubbed model")
     args = ap.parse_args(argv)
@@ -576,7 +651,8 @@ def main(argv=None):
         return selftest()
     tracks = search_tracks(data_dir=args.data_dir, source=args.source,
                            searxng_url=args.searxng_url,
-                           time_range=args.time_range)
+                           time_range=args.time_range, pages=args.pages,
+                           max_candidates=args.max_candidates, mix=args.mix)
     # 0 on success (including "nothing safe this week"), 1 when the run could not
     # be completed at all — the scheduler and the DM step care about the difference.
     return 0 if tracks is not None else 1

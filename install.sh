@@ -138,6 +138,62 @@ require_root() {
     fi
 }
 
+# ── Optional component: local SearXNG ────────────────────────────────────────
+# The netscan jobs used to search through ddgr, which scrapes DuckDuckGo and gets
+# throttled (HTTP 202) from residential IPs — that is how music-discover managed to
+# fail silently for two months. SearXNG is a metasearch front-end: one local
+# service queries several engines and returns clean JSON, so one engine sulking is
+# no longer fatal. It costs about 160 MB of RSS and has no GPU code path, so
+# llama.cpp's memory is untouched.
+#
+# Non-fatal on purpose: a failed search service must never abort an install that
+# has already built llama.cpp. Everything here logs a warning and moves on.
+ensure_podman() {
+    if command -v podman >/dev/null 2>&1; then
+        return 0
+    fi
+    log_info "Installing podman (needed for the optional SearXNG container)..."
+    if is_alpine; then
+        apk add --no-cache podman >/dev/null 2>&1
+    elif is_arch; then
+        pacman -S --noconfirm --needed podman >/dev/null 2>&1
+    elif is_fedora; then
+        dnf install -y podman >/dev/null 2>&1
+    fi
+    # Last statement is the function's status; the caller tests it, so a missing
+    # podman is a clean 'no' rather than a failure under set -e.
+    command -v podman >/dev/null 2>&1
+}
+
+install_searxng() {
+    log_info "Setting up the local SearXNG search service (optional)..."
+    if [[ ! -d "${SCRIPT_DIR}/searxng" ]]; then
+        log_warn "No searxng/ directory in ${SCRIPT_DIR}; skipping."
+        return 0
+    fi
+    if ! ensure_podman; then
+        log_warn "podman is not available on this system; skipping SearXNG."
+        log_warn "The jobs fall back to ddgr, which may get rate limited."
+        return 0
+    fi
+
+    mkdir -p /opt/searxng
+    if ! cp -r "${SCRIPT_DIR}/searxng"/* /opt/searxng/; then
+        log_warn "Could not copy searxng/ to /opt/searxng; skipping."
+        return 0
+    fi
+    chmod +x /opt/searxng/searxng-setup.sh || true
+
+    if sh /opt/searxng/searxng-setup.sh up; then
+        sh /opt/searxng/searxng-setup.sh boot || true
+        log_ok "SearXNG is up on http://127.0.0.1:8890 (localhost only)"
+    else
+        log_warn "SearXNG did not come up; see: sh /opt/searxng/searxng-setup.sh logs"
+        log_warn "The music job will fall back to ddgr until it does."
+    fi
+    return 0
+}
+
 # ─── llama.cpp fork selection ────────────────────────────────────────────────
 # Ask which llama.cpp source to build: TurboQuant fork (default), mainline
 # ggml-org/llama.cpp, or bee llama.cpp. Sets the LLAMA_FORK_NAME /
@@ -784,6 +840,24 @@ models:
   # Run 'install.sh configure' to add models interactively
 YAMLEOF
         log_ok "Created default /opt/llama-swap/config.yaml"
+    fi
+
+    # ── 12. Optional: local SearXNG ──
+    # Asked rather than assumed, and skipped entirely with --no-searxng or when
+    # stdin is not a terminal (unattended installs must not hang on a prompt).
+    local _want_searxng=1
+    for _arg in "$@"; do
+        if [[ "$_arg" == "--no-searxng" ]]; then _want_searxng=0; fi
+    done
+    if [[ "$_want_searxng" == "1" ]]; then
+        if [[ -t 0 ]]; then
+            prompt_yn "Install the local SearXNG search service (~160MB RAM, podman)?" y \
+                && install_searxng
+        else
+            install_searxng
+        fi
+    else
+        log_info "Skipping SearXNG (--no-searxng). Jobs will use ddgr."
     fi
 
     log_info ""
@@ -2009,6 +2083,8 @@ Commands:
   jobs         Open interactive TUI to manage job schedules (enable/disable, edit cron).
   models       Open interactive TUI to manage llama-swap models (add/edit/delete).
   webui [port] Launch temporary web configuration UI (default port 8888, auto-shutdown after 30 min).
+  searxng      Manage the optional local SearXNG search service (podman container,
+               localhost only): check|up|down|status|test|logs|boot.
   help         Show this help.
 
 Examples:
@@ -2085,6 +2161,20 @@ cmd_webui() {
     "${VENV_DIR}/bin/python3" "${NETSCAN_DIR}/webui.py" --port "${port}"
 }
 
+# ─── Subcommand: searxng ─────────────────────────────────────────────────────
+# Passthrough to the component's own script, so there is one implementation of
+# "how SearXNG is run here" rather than two that drift apart.
+cmd_searxng() {
+    local setup=/opt/searxng/searxng-setup.sh
+    if [[ ! -f "$setup" ]]; then
+        log_err "SearXNG is not installed (no ${setup})."
+        log_info "Install it with '${0} install', or copy searxng/ to /opt/searxng and run: sh ${setup} up"
+        exit 1
+    fi
+    shift  # drop the subcommand name; default to 'status'
+    exec sh "$setup" "${@:-status}"
+}
+
 main() {
     case "${1:-help}" in
         install)   cmd_install "$@";;
@@ -2096,6 +2186,7 @@ main() {
         jobs)      cmd_jobs "$@";;
         models)    cmd_models "$@";;
         webui)     cmd_webui "$@";;
+        searxng)   cmd_searxng "$@";;
         help|--help|-h) cmd_help;;
         *)
             log_err "Unknown command: ${1}"
