@@ -1,0 +1,11 @@
+# Keep line endings LF in the working tree, on every platform.
+#
+# Learned the hard way. A Windows checkout is CRLF by default, and that is invisible
+# until you copy something to the box: Python does not care (every .py job ran fine)
+# but bash does. A shell script uploaded from a Windows working copy dies with
+#   syntax error: unexpected end of file from `if' command
+# because every line carries a stray CR that mangles tokens, quotes and `fi`.
+#
+# The other half of the same lesson: check a script with `bash -n` before deploying
+# it, since a file that *runs* on the workstation can still be broken in transit.
+* text=auto eol=lf

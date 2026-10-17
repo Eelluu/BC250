@@ -24,24 +24,31 @@ LOG_FILE="$LOG_DIR/gpu-load.tsv"
 TS=$(date '+%Y-%m-%d %H:%M')
 
 # ─── Read hardware GPU metrics ───
+# The card and its hwmon are discovered, not hardcoded. This script read card1 and
+# hwmon2 while the box exposes card0 and hwmon1, and since every path is guarded with
+# `|| echo 0` it reported a clock of 0 and a temperature of 0 forever, while exiting 0
+# — a job that looks healthy and measures nothing. (card0-DP-1 and card0-DP-2 are
+# connector entries, hence the dash filter.)
+GPU_CARD=$(ls -d /sys/class/drm/card[0-9]* 2>/dev/null | grep -v -- '-' | head -1)
+GPU_HWMON=$(ls -d "$GPU_CARD"/device/hwmon/hwmon* 2>/dev/null | head -1)
 # GPU clock: parse the active frequency from pp_dpm_sclk (line ending with *)
-GPU_MHZ=$(grep '\*' /sys/class/drm/card1/device/pp_dpm_sclk 2>/dev/null \
-          | grep -oP '\d+(?=Mhz)' || echo "0")
+GPU_MHZ=$(grep '\*' "$GPU_CARD/device/pp_dpm_sclk" 2>/dev/null \
+          | awk -F'Mhz' '/Mhz/ {print $1}' | grep -oE '[0-9]+$' | head -1 || echo "0")
 # Temperature: millidegrees → degrees
-TEMP_MC=$(cat /sys/class/drm/card1/device/hwmon/hwmon2/temp1_input 2>/dev/null || echo "0")
+TEMP_MC=$(cat "$GPU_HWMON/temp1_input" 2>/dev/null || echo "0")
 TEMP_C=$(( TEMP_MC / 1000 ))
 
 # Throttle status from gpu_metrics binary (v2.2, offset 108, uint32 LE)
 THROTTLE="0"
-if [ -r /sys/class/drm/card1/device/gpu_metrics ]; then
+if [ -r "$GPU_CARD/device/gpu_metrics" ]; then
     THROTTLE=$(python3 -c "
-import struct
-d = open('/sys/class/drm/card1/device/gpu_metrics','rb').read()
+import struct, sys
+d = open(sys.argv[1],'rb').read()
 if len(d) >= 112 and d[2] == 2:
     print(struct.unpack_from('<I', d, 108)[0])
 else:
     print(0)
-" 2>/dev/null || echo "0")
+" "$GPU_CARD/device/gpu_metrics" 2>/dev/null || echo "0")
 fi
 
 # ─── Fetch Ollama process list ───

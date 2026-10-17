@@ -24,8 +24,12 @@ SCAN_FILE=$(ls -t "$SCAN_DIR"/scan-*.json 2>/dev/null | head -1)
 ENUM_FILE=$(ls -t "$ENUM_DIR"/enum-*.json 2>/dev/null | head -1)
 
 if [[ -z "$SCAN_FILE" ]]; then
-    log "VULNSCAN: No scan data found, run scan.sh first"
-    exit 1
+    # Exit 0 on purpose: "no scan data" means scan.sh has not produced any, which is
+    # scan.sh's failure to report, not this job's. Exiting 1 here made the bot send an
+    # error notification every night for a problem that lives somewhere else — and it
+    # buried the job that actually broke.
+    log "VULNSCAN: no scan data yet (scan.sh has not produced one) — nothing to do"
+    exit 0
 fi
 
 log "═══ VULNSCAN START — $(basename "$SCAN_FILE") ═══"

@@ -19,10 +19,41 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 echo "[$(date)] ═══ NETSCAN v3 START ═══"
 
 # ── Phase 1: Ping sweep ──
+# Which network are we scanning? Derived from the interface, NOT hardcoded: this
+# script scanned 192.168.1.0/24 in the repo and 192.168.3.0/24 on the box while the
+# LAN was 192.168.0.0/24 — a silent way to find zero hosts for months. Override
+# with LAN_CIDR in .env if you ever need to point it somewhere specific.
+command -v nmap >/dev/null 2>&1 || {
+    echo "[$(date)] ERROR: nmap is not installed (apk add nmap) — cannot scan"
+    exit 1
+}
+if [[ -z "${LAN_CIDR:-}" ]]; then
+    LAN_CIDR="$(python3 - <<'PYCIDR'
+import ipaddress, subprocess
+try:
+    out = subprocess.run(["ip", "-4", "-o", "addr", "show", "scope", "global"],
+                         capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 4 and not parts[1].startswith(
+                ("lo", "docker", "veth", "podman", "br-")):
+            print(ipaddress.ip_interface(parts[3]).network)
+            break
+except Exception:
+    pass
+PYCIDR
+)"
+fi
+[[ -n "${LAN_CIDR:-}" ]] || {
+    echo "[$(date)] ERROR: could not work out the LAN subnet — set LAN_CIDR in .env"
+    exit 1
+}
+echo "[$(date)] Scanning $LAN_CIDR"
+
 echo "[$(date)] Phase 1: Ping sweep..."
 NMAP_PING="/tmp/netscan-ping-${DATE}.txt"
 sudo nmap -sn --max-retries 2 --host-timeout 5s \
-  192.168.1.0/24 > "$NMAP_PING" 2>/dev/null
+  "$LAN_CIDR" > "$NMAP_PING" 2>/dev/null
 HOST_COUNT=$(grep -c "Host is up" "$NMAP_PING" || echo 0)
 echo "[$(date)] Found $HOST_COUNT hosts"
 
@@ -31,7 +62,7 @@ ARP_FILE="/tmp/netscan-arp-${DATE}.txt"
 if command -v arp-scan &>/dev/null; then
     echo "[$(date)] Phase 1.3: ARP scan..."
     sudo arp-scan --localnet --retry=2 --timeout=500 2>/dev/null > "$ARP_FILE" || true
-    ARP_COUNT=$(grep -cP '^\d+\.\d+\.\d+\.\d+' "$ARP_FILE" 2>/dev/null || echo 0)
+    ARP_COUNT=$(grep -cE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' "$ARP_FILE" 2>/dev/null || echo 0)
     echo "[$(date)] ARP scan: $ARP_COUNT hosts (may find hosts missed by ping)"
 else
     touch "$ARP_FILE"
@@ -53,7 +84,7 @@ fi
 # ── Phase 2: Port scan discovered hosts (top 100 ports) ──
 echo "[$(date)] Phase 2: Port scanning $HOST_COUNT hosts..."
 NMAP_PORTS="/tmp/netscan-ports-${DATE}.txt"
-grep "Nmap scan report" "$NMAP_PING" | grep -oP '\d+\.\d+\.\d+\.\d+' > /tmp/netscan-targets.txt
+grep "Nmap scan report" "$NMAP_PING" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' > /tmp/netscan-targets.txt
 sudo nmap -sS --top-ports 100 --open --max-retries 1 --host-timeout 15s \
   -iL /tmp/netscan-targets.txt > "$NMAP_PORTS" 2>/dev/null || true
 echo "[$(date)] Port scan done"
@@ -62,7 +93,7 @@ echo "[$(date)] Port scan done"
 echo "[$(date)] Phase 2.5: Service banners (top open ports)..."
 NMAP_SVC="/tmp/netscan-svc-${DATE}.txt"
 # Only scan hosts that had open ports — extract IPs from port scan output
-OPEN_HOSTS=$(grep "Nmap scan report" "$NMAP_PORTS" | grep -oP '\d+\.\d+\.\d+\.\d+' | sort -u)
+OPEN_HOSTS=$(grep "Nmap scan report" "$NMAP_PORTS" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sort -u)
 if [ -n "$OPEN_HOSTS" ]; then
     echo "$OPEN_HOSTS" > /tmp/netscan-svc-targets.txt
     SVC_COUNT=$(wc -l < /tmp/netscan-svc-targets.txt)

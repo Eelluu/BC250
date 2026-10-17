@@ -1877,13 +1877,17 @@ def main():
         run_scrape_only()
     elif args.analyze_only:
         run_analyze_only()
-    elif args.command == 'scan':
-        run_full_scan()
     elif args.command == 'status':
         print_status()
     else:
-        parser.print_help()
-        sys.exit(1)
+        # No subcommand is not an error: it is how the scheduler runs this job, since
+        # it builds the command from the job's name alone and cannot pass one. This
+        # used to print the help and exit 1, so the weekly CTI job failed every single
+        # time. Default to the full scan, which is what the job exists for.
+        if args.command is None:
+            print("no subcommand given — running the full scan "
+                  "(the scheduler cannot pass one; use 'status' to inspect the DB)")
+        run_full_scan()
 
 
 if __name__ == "__main__":
