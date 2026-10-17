@@ -401,6 +401,39 @@ def track_list(value):
     return None
 
 
+def _enrich(tracks, candidates):
+    """Reattach the metadata the model cannot be trusted to echo.
+
+    The model answers with its own JSON: artist, title, url, and its own paraphrase
+    of the licence. Everything we actually *verified* — that the licence is CC-BY
+    and not NC/ND, whether a direct download exists, whether it can trigger Content
+    ID, and which catalogue it came from — lives in the candidate list we sent it.
+    So it is joined back here by URL instead of being expected in the reply.
+
+    Measured, not theorised: the first real Jamendo run produced 23 tracks with no
+    provenance label at all, because the `source` field never survived the round
+    trip through the model.
+    """
+    by_url = {}
+    for c in candidates or []:
+        url = (c.get("url") or "").strip()
+        if url:
+            by_url[url] = c
+            by_url[url.rstrip("/")] = c
+    for t in tracks:
+        url = (t.get("url") or "").strip()
+        c = by_url.get(url) or by_url.get(url.rstrip("/"))
+        if not c:
+            continue
+        for key in ("source", "license", "audio_url", "content_id_free",
+                    "download_allowed", "type"):
+            if c.get(key) is not None:
+                t[key] = c[key]
+        if c.get("license"):            # the verified label beats a paraphrase
+            t["license_type"] = c["license"]
+    return tracks
+
+
 def curate(results, llm=call_llm, data_dir=DATA_DIR, mix="coherent",
            has_verified=False, has_inferred=True):
     """Ask the model to filter the candidates. Returns (tracks, genre) or (None, None).
@@ -429,6 +462,7 @@ def curate(results, llm=call_llm, data_dir=DATA_DIR, mix="coherent",
         log(f"the model returned JSON that is not a track list — saved to {path}")
         return None, None
     tracks = [t for t in tracks if isinstance(t, dict)]
+    tracks = _enrich(tracks, results)
     if mix == "wide":
         return tracks, f"{GENRE} (mix)"
     genre_label, tracks = pick_dominant_genre(tracks)
@@ -857,9 +891,22 @@ def selftest():
                   and 'WITH a "license" field' in prompts[0][0])
     both_catalogues = prompts and "jamendo.com" in prompts[0][1] and "soundcloud.com" in prompts[0][1]
     ok &= merged is not None and both_rules and both_catalogues
+    # And the enrichment: what the model returns is only artist/title/url, so the
+    # verified metadata has to be joined back or the report loses its labels.
+    enriched = _enrich([{"artist": "A", "title": "T",
+                         "url": "https://www.jamendo.com/track/9",
+                         "license_type": "the model's guess"}],
+                       [{"url": "https://www.jamendo.com/track/9", "source": "jamendo",
+                         "license": "CC-BY", "audio_url": "https://mp3l/x.mp3",
+                         "content_id_free": False, "download_allowed": True}])
+    ok &= enriched[0]["source"] == "jamendo" and enriched[0]["license_type"] == "CC-BY"
+    ok &= enriched[0]["content_id_free"] is False and enriched[0]["audio_url"].endswith(".mp3")
     print(f"  source=both     -> {len(merged) if merged else 0} curated from 2 "
           f"catalogues; prompt carried both licence rules ({both_rules}) and both "
           f"results ({both_catalogues})")
+    print(f"  enrichment      -> source={enriched[0]['source']}, "
+          f"license_type={enriched[0]['license_type']!r} (verified beats the model's "
+          f"guess), Content-ID flag and audio link recovered")
 
     # 3. Coherence: a clear majority filters, a thin field does not.
     many = ([{"genre": "Deep House"}] * 3) + [{"genre": "Tech House"}]

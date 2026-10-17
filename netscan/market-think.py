@@ -547,16 +547,37 @@ Be concise but specific. Target: 600-900 words. English only."""
 
 # ── Main ──────────────────────────────────────────────────────────────────
 
+# How many tickers a no-argument run analyses. The scheduler builds the command
+# from the job's *name* alone, so it can never pass --ticker: whichever value this
+# takes, it is the only way an unassisted cron run can do real work.
+ROTATION_SIZE = 3
+
+
+def rotate_tickers(size=ROTATION_SIZE, today=None):
+    """A deterministic rotating slice of the ticker list, one slice per day.
+
+    Sized so that one run fits comfortably in its cron slot and the whole list is
+    covered every few days, without needing state on disk.
+    """
+    slugs = sorted(TICKERS)
+    if not slugs:
+        return []
+    day = (today or datetime.now()).timetuple().tm_yday
+    start = (day * max(1, size)) % len(slugs)
+    return [slugs[(start + i) % len(slugs)] for i in range(min(size, len(slugs)))]
+
+
 def main():
     parser = argparse.ArgumentParser(description="Deep per-ticker market intelligence")
     group = parser.add_mutually_exclusive_group()
     group.add_argument('--ticker', '-t', help="Ticker slug to analyze")
     group.add_argument('--summary', '-s', action='store_true', help="Generate daily executive summary")
     group.add_argument('--list', '-l', action='store_true', help="List available tickers")
+    group.add_argument('--all', action='store_true', help="Analyze every ticker (slow)")
+    parser.add_argument('--rotate-size', type=int, default=ROTATION_SIZE,
+                        help=f"Tickers per no-argument run (default {ROTATION_SIZE})")
     args = parser.parse_args()
 
-    if not args.ticker and not args.summary:
-        args.list = True
     if args.list:
         for slug, info in sorted(TICKERS.items()):
             print(f"  {slug:10s}  {info['symbol']:12s}  {info['name']:24s}  [{info['sector']}]")
@@ -564,8 +585,19 @@ def main():
 
     if args.summary:
         think_summary()
-    else:
+        return
+
+    if args.ticker:
         think_one_ticker(args.ticker)
+        return
+
+    # No arguments: the cron path. Until now this printed the ticker list and
+    # exited in zero seconds, which is what the job had been doing on every
+    # scheduled run (three times in the log, each reported as a success).
+    slugs = sorted(TICKERS) if args.all else rotate_tickers(args.rotate_size)
+    log(f"No ticker given: rotating analysis of {len(slugs)} → {', '.join(slugs)}")
+    for slug in slugs:
+        think_one_ticker(slug)
 
 if __name__ == "__main__":
     main()
