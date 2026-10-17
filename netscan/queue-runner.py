@@ -19,6 +19,7 @@ import signal
 import socket
 import glob
 import base64
+import hashlib
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -3329,6 +3330,12 @@ def save_state(state):
         with open(STATE_FILE, 'w') as f: json.dump(state, f)
     except: pass
 
+# Last report digest per job, for report.dedupe. In memory on purpose: after a
+# restart a persisting condition is announced once more, which is the safe side to
+# err on.
+_REPORT_DIGESTS = {}
+
+
 def _job_output_tail(res, lines=15, limit=1800):
     """Last lines of a job's stdout+stderr, for a report or an error notice."""
     if res is None:
@@ -3381,6 +3388,30 @@ def _maybe_send_report(name, job, res=None):
     if not parts:
         return
     msg = f"{title}\n\n" + "\n\n".join(parts)
+
+    # Optional gate: send only when the message matches. This is what makes a
+    # report safe on a job that runs every 5 or 10 minutes — a health scanner can
+    # then report only when it has something to report, instead of staying silent
+    # (alerts lost) or flooding (144 messages a day).
+    only_if = (report.get("only_if") or "").strip()
+    if only_if:
+        try:
+            if not re.search(only_if, msg, re.IGNORECASE):
+                log(f"  📄 Report for {name} did not match only_if — not sent")
+                return
+        except re.error as e:
+            log(f"  ⚠️ Bad only_if regex for {name}: {e}")
+
+    # Optional dedupe: skip a report identical to the last one sent for this job,
+    # so a persisting condition (3 criticals that are still 3 criticals) is
+    # announced once rather than every cycle.
+    if report.get("dedupe"):
+        digest = hashlib.sha1(msg.encode("utf-8", "replace")).hexdigest()
+        if _REPORT_DIGESTS.get(name) == digest:
+            log(f"  📄 Report for {name} unchanged since last time — not repeated")
+            return
+        _REPORT_DIGESTS[name] = digest
+
     if _dm_owner(msg):
         log(f"  📨 Report sent to owner: {name} ({len(msg)} chars)")
     else:
