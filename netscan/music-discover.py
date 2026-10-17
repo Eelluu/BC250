@@ -57,6 +57,14 @@ DDGR_TIMEOUT_S = 120
 SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://127.0.0.1:8890")
 SEARXNG_TIMEOUT_S = 40
 
+# Jamendo is the source that carries the licence as DATA rather than as something
+# the model has to infer from a search snippet: its Creative Commons catalogue
+# returns the licence per track, so "is this safe to monetise" stops being an
+# opinion. Needs a free client_id (devportal.jamendo.com) in JAMENDO_CLIENT_ID.
+JAMENDO_URL = "https://api.jamendo.com/v3.0/tracks/"
+JAMENDO_CLIENT_ID = os.environ.get("JAMENDO_CLIENT_ID", "")
+JAMENDO_TIMEOUT_S = 30
+
 
 def log(msg):
     print(f"  {msg}", flush=True)
@@ -178,6 +186,92 @@ def search_searxng(query, base=SEARXNG_URL, time_range=None, limit=DDGR_MAX_RESU
     return out[:limit] if limit else out
 
 
+def cc_usable(ccurl):
+    """Can a monetised YouTube mix legally use a track under this CC licence?
+
+    The rule, which is the whole reason Jamendo is worth the API key: a mix is a
+    derivative work on a channel that carries ads, so
+      * NonCommercial (-nc) is out — monetised is commercial, full stop;
+      * NoDerivatives (-nd) is out — cutting a track into a mix is a derivative;
+      * Attribution (by), ShareAlike (by-sa), CC0/Public Domain and the Public
+        Domain Mark are fine, with the attribution the report already prints.
+
+    Returns (ok, label) so the report can say which licence it relied on.
+    """
+    text = (ccurl or "").lower()
+    if not text:
+        return False, ""
+    if "publicdomain" in text or "/zero/" in text or "/mark/" in text:
+        return True, "CC0 / Public Domain"
+    if "creativecommons.org" not in text:
+        return False, ""            # "all rights reserved" and friends
+    if "-nc" in text or "-nd" in text or "/nc" in text:
+        return False, ""
+    for slug, label in (("/by-sa/", "CC-BY-SA"), ("/by/", "CC-BY")):
+        if slug in text:
+            return True, label
+    return False, ""
+
+
+def search_jamendo(tags="house", client_id=None, limit=50, opener=None,
+                   timeout=JAMENDO_TIMEOUT_S):
+    """Search Jamendo's Creative Commons catalogue. Returns track dicts or None.
+
+    Unlike the search-engine sources, every result here arrives with its licence
+    attached, and the unusable ones are dropped before the model ever sees them:
+    no amount of good taste compensates for a NonCommercial or NoDerivatives
+    track in an ad-carrying mix.
+    """
+    client_id = client_id or JAMENDO_CLIENT_ID
+    if not client_id:
+        log("jamendo: no JAMENDO_CLIENT_ID set (free at devportal.jamendo.com)")
+        return None
+    params = {
+        "client_id": client_id,
+        "format": "json",
+        "limit": str(limit),
+        "fuzzytags": tags,
+        "include": "licenses musicinfo",
+        "audioformat": "mp32",
+        "order": "releasedate_desc",
+    }
+    url = f"{JAMENDO_URL}?{urllib.parse.urlencode(params)}"
+    opener = opener or urllib.request.urlopen
+    try:
+        with opener(url, timeout=timeout) as resp:
+            payload = json.loads(resp.read())
+    except Exception as ex:
+        log(f"jamendo failed: {type(ex).__name__}: {ex}")
+        return None
+
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, list):
+        log("jamendo answered without a results list")
+        return None
+
+    out, rejected = [], 0
+    for r in results:
+        if not isinstance(r, dict) or not r.get("shareurl"):
+            continue
+        ok, label = cc_usable(r.get("license_ccurl"))
+        if not ok:
+            rejected += 1
+            continue
+        out.append({
+            "artist": r.get("artist_name") or "?",
+            "title": r.get("name") or "?",
+            "url": r["shareurl"],
+            "audio_url": r.get("audiodownload") or "",
+            "type": "track",
+            "license": label,
+            "abstract": f"{label} — verified in Jamendo's CC catalogue"
+                        + (f" (tags: {r.get('musicinfo', {}).get('tags', {})})"
+                           if isinstance(r.get("musicinfo"), dict) else ""),
+        })
+    log(f"jamendo: {len(out)} usable result(s), {rejected} dropped for NC/ND/other")
+    return out or None
+
+
 SUBGENRE_RULE = """SUBGENRE COHERENCE (IMPORTANT):
 - Pick ONE subgenre of {genre} for this week's report (e.g. Deep House,
   Tech House, Melodic House, Afro House, Progressive House).
@@ -193,7 +287,7 @@ WIDE_RULE = """SUBGENRES:
 - Set the 'genre' field on each track to that track's own subgenre."""
 
 
-def build_prompt(genre=GENRE, mix="coherent"):
+def build_prompt(genre=GENRE, mix="coherent", verified=False):
     """The curation prompt, in one of two shapes.
 
     `coherent` (the default, and the behaviour this job shipped with) asks for a
@@ -202,17 +296,30 @@ def build_prompt(genre=GENRE, mix="coherent"):
     22 mentioning licence wording, that cap is what turns ~15 usable tracks into
     3: the model picks the largest subgenre and drops the rest by instruction, not
     by judgement. `wide` drops the cap and keeps the same strict licence filter.
+
+    `verified=True` is for sources that ship the licence as data (Jamendo). Then
+    the licence question is already settled and the model's job is taste, not
+    copyright: asking it to re-derive a licence it has been handed only invites it
+    to second-guess good data.
     """
     rule = WIDE_RULE if mix == "wide" else SUBGENRE_RULE.format(genre=genre)
-    return f"""You are a professional music copyright attorney and YouTube curator.
-Review the following search results for {genre} tracks uploaded this week.
-GOAL: Find ONLY tracks that are 100% safe for YouTube Monetization (Ads).
-
-STRICT CRITERIA:
+    if verified:
+        criteria = """LICENCES ARE VERIFIED DATA:
+Every result carries a "license" field checked against the source's catalogue
+(CC-BY, CC-BY-SA or CC0 only: NonCommercial and NoDerivatives are already
+filtered out, because a monetised mix is commercial and is a derivative work).
+Do not second-guess that field. Your job here is to pick tracks that will work
+musically in a mix, and to describe what each one sounds like."""
+    else:
+        criteria = """STRICT CRITERIA:
 1. Must be 'Royalty Free', 'No Copyright', or 'CC-BY' (Creative Commons Attribution).
 2. Must allow 'Commercial Use'.
 3. Discard ANY track that is 'Personal Use Only' or has 'No Derivatives'.
-4. Discard ANY track where monetization safety is not 'High'.
+4. Discard ANY track where monetization safety is not 'High'."""
+    return f"""You are a professional music curator for a YouTube house-mix channel.
+GOAL: choose tracks that are safe to monetise and that will sound good together.
+
+{criteria}
 
 {rule}
 
@@ -259,7 +366,7 @@ def track_list(value):
     return None
 
 
-def curate(results, llm=call_llm, data_dir=DATA_DIR, mix="coherent"):
+def curate(results, llm=call_llm, data_dir=DATA_DIR, mix="coherent", verified=False):
     """Ask the model to filter the candidates. Returns (tracks, genre) or (None, None).
 
     An empty list means "nothing safe this week", which is a valid answer; None
@@ -268,7 +375,7 @@ def curate(results, llm=call_llm, data_dir=DATA_DIR, mix="coherent"):
     subgenre is wanted.
     """
     user_prompt = f"Search Results:\n{json.dumps(results, indent=2)}"
-    raw_reply = llm(build_prompt(GENRE, mix), user_prompt, temperature=0.2,
+    raw_reply = llm(build_prompt(GENRE, mix, verified), user_prompt, temperature=0.2,
                     max_tokens=4000, think=False)
     if not (raw_reply or "").strip():
         log("the model returned nothing (empty content)")
@@ -386,7 +493,7 @@ def write_report(tracks, genre_label=None, data_dir=DATA_DIR):
             artist = (t.get("artist") or "?").strip()
             title = (t.get("title") or "?").strip()
             url = (t.get("url") or "").strip().replace('"', "")
-            lic = (t.get("license_type") or "").strip()
+            lic = (t.get("license_type") or t.get("license") or "").strip()
             kind = download_kind(url) if url else "unknown"
             warning = {"set": "  ⚠️ playlist — no entra en la descarga automática",
                        "profile": "  ⚠️ perfil, no es una pista",
@@ -394,8 +501,12 @@ def write_report(tracks, genre_label=None, data_dir=DATA_DIR):
             lines.append(f"{i}. **{artist}** — *{title}*"
                          + (f"  ({lic})" if lic else "") + warning)
             if url:
-                lines.append(f"   🔗 {url}")
-                (track_urls if kind == "track" else other_urls).append(url)
+                # Jamendo hands over the audio file directly; prefer it for the
+                # download command and keep the page for attribution.
+                audio = (t.get("audio_url") or "").strip()
+                lines.append(f"   🔗 {url}" + (f"   ⬇️ {audio}" if audio else ""))
+                link = audio or url
+                (track_urls if download_kind(link) == "track" else other_urls).append(link)
         lines += ["", "▶️ **Descarga todas de golpe** (revísalas antes de descargar):"]
         # Keep the command under ~1800 chars so the DM code block is never split
         # mid-line by the 2000-char Discord limit (many tracks would break it).
@@ -421,19 +532,28 @@ def write_report(tracks, genre_label=None, data_dir=DATA_DIR):
 
 def search_tracks(data_dir=DATA_DIR, runner=subprocess.run, llm=call_llm,
                   source="auto", searxng_url=SEARXNG_URL, opener=None,
-                  time_range="", pages=2, max_candidates=40, mix="coherent"):
+                  time_range="", pages=2, max_candidates=40, mix="coherent",
+                  jamendo_tags=None, jamendo_client_id=None):
     """One weekly run. Returns the list of tracks (possibly empty) or None.
 
-    `source`: auto tries SearXNG first and falls back to ddgr; "searxng" and
-    "ddgr" force one, which is how you find out which half is unhappy.
+    `source`: auto goes Jamendo (verified CC licences) -> local SearXNG -> ddgr,
+    each one skipped if it is unavailable, which is also how you find out which
+    half is unhappy.
     """
     genre = GENRE
     print(f"🔎 Starting STRICT discovery for monetizable {genre}...")
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    results = None
-    if source in ("auto", "searxng"):
+    results, verified = None, False
+    jam_tags = jamendo_tags or "house"
+    cid = jamendo_client_id if jamendo_client_id is not None else JAMENDO_CLIENT_ID
+    if source in ("auto", "jamendo"):
+        print(f"  Searching Jamendo (CC catalogue, tags={jam_tags})")
+        results = search_jamendo(tags=jam_tags, client_id=cid,
+                                 limit=max_candidates, opener=opener)
+        verified = results is not None
+    if results is None and source in ("auto", "searxng"):
         print(f"  Searching SearXNG ({searxng_url}) for: {search_terms(genre)}"
               f"{f' [time_range={time_range}]' if time_range else ''}")
         results = search_searxng(search_terms(genre), base=searxng_url,
@@ -447,7 +567,8 @@ def search_tracks(data_dir=DATA_DIR, runner=subprocess.run, llm=call_llm,
         return None
 
     print(f"  Analyzing {len(results)} candidates for MONETIZATION...")
-    tracks, genre_label = curate(results, llm=llm, data_dir=data_dir, mix=mix)
+    tracks, genre_label = curate(results, llm=llm, data_dir=data_dir, mix=mix,
+                                 verified=verified)
     if tracks is None:
         print("❌ The model's curation could not be used (raw reply kept).")
         return None
@@ -589,6 +710,32 @@ def selftest():
     print(f"  mix knob        -> coherent keeps the majority of 3 (2), wide keeps "
           f"all {len(wide_tracks)} as '{wide_genre}'")
 
+    # 2d. Jamendo: the licence filter is the point, not the search. NonCommercial
+    # and NoDerivatives must never reach the report, whatever the model thinks.
+    ok &= cc_usable("http://creativecommons.org/licenses/by/3.0/")[1] == "CC-BY"
+    ok &= cc_usable("http://creativecommons.org/licenses/by-sa/4.0/")[1] == "CC-BY-SA"
+    ok &= cc_usable("http://creativecommons.org/publicdomain/zero/1.0/")[0]
+    ok &= not cc_usable("http://creativecommons.org/licenses/by-nc/3.0/")[0]
+    ok &= not cc_usable("http://creativecommons.org/licenses/by-nd/3.0/")[0]
+    ok &= not cc_usable("http://creativecommons.org/licenses/by-nc-nd/2.5/")[0]
+    ok &= not cc_usable("")[0] and not cc_usable("https://x.example/all-rights")[0]
+    jam = json.dumps({"results": [
+        {"name": "Deep One", "artist_name": "A",
+         "shareurl": "https://www.jamendo.com/track/1",
+         "audiodownload": "https://mp3l.jamendo.com/?trackid=1",
+         "license_ccurl": "http://creativecommons.org/licenses/by/3.0/"},
+        {"name": "NC one", "artist_name": "B",
+         "shareurl": "https://www.jamendo.com/track/2",
+         "license_ccurl": "http://creativecommons.org/licenses/by-nc/3.0/"},
+    ]})
+    jtracks = search_jamendo("house", client_id="test",
+                             opener=lambda url, timeout=0: _FakeResp(jam))
+    ok &= jtracks is not None and len(jtracks) == 1 and jtracks[0]["license"] == "CC-BY"
+    ok &= jtracks[0]["audio_url"].startswith("https://mp3l")
+    ok &= search_jamendo("house", client_id="", opener=lambda *a, **k: None) is None
+    print(f"  jamendo         -> by/by-sa/zero accepted, nc/nd rejected; "
+          f"{len(jtracks) if jtracks else 0} of 2 kept, direct audio link present")
+
     # 3. Coherence: a clear majority filters, a thin field does not.
     many = ([{"genre": "Deep House"}] * 3) + [{"genre": "Tech House"}]
     label, kept = pick_dominant_genre(many)
@@ -627,8 +774,12 @@ def selftest():
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Weekly CC/royalty-free house music discovery")
     ap.add_argument("--data-dir", default=str(DATA_DIR))
-    ap.add_argument("--source", choices=("auto", "searxng", "ddgr"), default="auto",
-                    help="auto = local SearXNG first, ddgr as fallback")
+    ap.add_argument("--source", choices=("auto", "jamendo", "searxng", "ddgr"),
+                    default="auto",
+                    help="auto = Jamendo (verified CC licences) if JAMENDO_CLIENT_ID "
+                         "is set, then the local SearXNG, then ddgr")
+    ap.add_argument("--jamendo-tags", default="house",
+                    help="Jamendo fuzzytags to search (house, deephouse, techhouse...)")
     ap.add_argument("--searxng-url", default=SEARXNG_URL)
     ap.add_argument("--time-range", default="",
                     choices=("", "day", "week", "month", "year"),
@@ -652,7 +803,8 @@ def main(argv=None):
     tracks = search_tracks(data_dir=args.data_dir, source=args.source,
                            searxng_url=args.searxng_url,
                            time_range=args.time_range, pages=args.pages,
-                           max_candidates=args.max_candidates, mix=args.mix)
+                           max_candidates=args.max_candidates, mix=args.mix,
+                           jamendo_tags=args.jamendo_tags)
     # 0 on success (including "nothing safe this week"), 1 when the run could not
     # be completed at all — the scheduler and the DM step care about the difference.
     return 0 if tracks is not None else 1
