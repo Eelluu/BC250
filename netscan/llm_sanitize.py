@@ -22,12 +22,20 @@ import urllib.parse
 LLM_URL = os.environ.get("LLM_URL", "http://localhost:8080/v1")
 LLM_MODEL = os.environ.get("LLM_MODEL", "gemma4-26b-q3")
 
-def call_llm(system_prompt: str, user_prompt: str, temperature: float = 0.3, max_tokens: int = 3000) -> str:
+def call_llm(system_prompt: str, user_prompt: str, temperature: float = 0.3,
+             max_tokens: int = 3000, think: bool = True) -> str:
     """
     Call local LLM via llama-swap (OpenAI format).
     Shared by all netscan scripts.
+
+    think=False sends chat_template_kwargs {"enable_thinking": false}, which is
+    what actually stops the local gemma-4 models from spending the whole token
+    budget on a chain of thought and handing back an empty `content` (measured:
+    6 completion tokens instead of 102 on a trivial prompt, and ~12s per market
+    instead of ~130s). The "/nothink" prefix this repo used before is a Qwen
+    convention and does nothing to those models.
     """
-    payload = json.dumps({
+    body = {
         "model": LLM_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -35,8 +43,11 @@ def call_llm(system_prompt: str, user_prompt: str, temperature: float = 0.3, max
         ],
         "stream": False,
         "temperature": temperature,
-        "max_tokens": max_tokens
-    }).encode()
+        "max_tokens": max_tokens,
+    }
+    if not think:
+        body["chat_template_kwargs"] = {"enable_thinking": False}
+    payload = json.dumps(body).encode()
 
     try:
         req = urllib.request.Request(
@@ -167,3 +178,46 @@ def strip_to_json(text: str) -> str:
             return match.group(0)
 
     return text.strip()
+
+
+def _strip_think_tags(text: str) -> str:
+    """Drop reasoning blocks, without touching the JSON that follows."""
+    if not text:
+        return ""
+    if "</think>" in text:
+        text = text.split("</think>")[-1]
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(
+        r"<\|begin_of_thought\|>.*?<\|end_of_thought\|>", "", text, flags=re.DOTALL
+    )
+    text = re.sub(r"</?think>", "", text)
+    return re.sub(r"<\|(?:begin|end)_of_thought\|>", "", text)
+
+
+def extract_json(text: str):
+    """Parse the first complete JSON value in a model answer.
+
+    json.loads on a greedy slice fails with "Extra data" when the model writes a
+    value and then keeps talking, and takes the wrong thing entirely when it
+    writes a scratch value first. json.JSONDecoder.raw_decode stops at the end of
+    the first complete value, so this walks to the first '{' or '[' that parses.
+
+    It deliberately does NOT go through strip_to_json: that helper prefers the
+    first {...} over the first [...], so an array of objects — exactly what a
+    "return a JSON array" prompt produces — gets chopped down to its first
+    element and then looks like a malformed answer. Measured, not theorised: it
+    broke every bare-array fixture in music-discover's selftest.
+
+    Raises json.JSONDecodeError when there is no complete value to be found.
+    """
+    cleaned = _strip_think_tags(text)
+    decoder = json.JSONDecoder()
+    for start, char in enumerate(cleaned):
+        if char not in "{[":
+            continue
+        try:
+            value, _ = decoder.raw_decode(cleaned[start:])
+            return value
+        except json.JSONDecodeError:
+            continue
+    raise json.JSONDecodeError("no complete JSON value found", cleaned or "", 0)
