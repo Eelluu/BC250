@@ -229,12 +229,28 @@ def search_jamendo(tags="house", client_id=None, limit=50, opener=None,
     params = {
         "client_id": client_id,
         "format": "json",
-        "limit": str(limit),
-        "fuzzytags": tags,
+        "limit": str(max(1, min(limit, 200))),   # Jamendo caps limit at 200
+        "fuzzytags": tags,                        # OR between tags; `tags` would AND
         "include": "licenses musicinfo",
         "audioformat": "mp32",
         "order": "releasedate_desc",
+        # Ask the catalogue for usable licences before filtering locally: ccnc and
+        # ccnd are the Creative Commons NonCommercial and NoDerivatives switches,
+        # i.e. exactly the two a monetised, derivative mix cannot use. The
+        # client-side cc_usable() check stays as the authority, because reading
+        # those booleans backwards is an easy mistake to make and the cost of the
+        # mistake is a copyright claim.
+        #
+        # Deliberately NOT set: prolicensing / probackground. Those return the paid
+        # Jamendo *Licensing* catalogue, which is a different product with a
+        # different licence model — the free Creative Commons catalogue is the
+        # whole point here.
+        "ccnc": "0",
+        "ccnd": "0",
     }
+    # The response carries content_id_free per track ("will not trigger YouTube's
+    # Content ID"), which is reported rather than filtered on: filtering would drop
+    # usable tracks, and the owner should see the flag before deciding.
     url = f"{JAMENDO_URL}?{urllib.parse.urlencode(params)}"
     opener = opener or urllib.request.urlopen
     try:
@@ -258,7 +274,7 @@ def search_jamendo(tags="house", client_id=None, limit=50, opener=None,
         log("jamendo answered without a results list")
         return None
 
-    out, rejected = [], 0
+    out, rejected, no_download = [], 0, 0
     for r in results:
         if not isinstance(r, dict) or not r.get("shareurl"):
             continue
@@ -266,18 +282,27 @@ def search_jamendo(tags="house", client_id=None, limit=50, opener=None,
         if not ok:
             rejected += 1
             continue
+        # A Creative Commons licence does not imply a downloadable file: the artist
+        # chooses, and Jamendo blanks `audiodownload` when they say no.
+        audio = r.get("audiodownload") or ""
+        if not audio or r.get("audiodownload_allowed") is False:
+            no_download += 1
         out.append({
             "artist": r.get("artist_name") or "?",
             "title": r.get("name") or "?",
             "url": r["shareurl"],
-            "audio_url": r.get("audiodownload") or "",
+            "audio_url": audio,
             "type": "track",
             "license": label,
+            "content_id_free": r.get("content_id_free"),
+            "download_allowed": bool(audio) and r.get("audiodownload_allowed") is not False,
             "abstract": f"{label} — verified in Jamendo's CC catalogue"
+                        + (" — no direct download" if not audio else "")
                         + (f" (tags: {r.get('musicinfo', {}).get('tags', {})})"
                            if isinstance(r.get("musicinfo"), dict) else ""),
         })
-    log(f"jamendo: {len(out)} usable result(s), {rejected} dropped for NC/ND/other")
+    log(f"jamendo: {len(out)} usable result(s), {rejected} dropped for NC/ND/other, "
+        f"{no_download} without a direct download")
     return out or None
 
 
@@ -507,6 +532,11 @@ def write_report(tracks, genre_label=None, data_dir=DATA_DIR):
             warning = {"set": "  ⚠️ playlist — no entra en la descarga automática",
                        "profile": "  ⚠️ perfil, no es una pista",
                        "unknown": "  ⚠️ enlace no reconocido"}.get(kind, "")
+            # Jamendo flags worth seeing before downloading or uploading anything.
+            if t.get("download_allowed") is False:
+                warning += "  ⚠️ sin descarga directa (el artista no la permitió)"
+            if t.get("content_id_free") is False:
+                warning += "  ⚠️ puede activar Content ID en YouTube"
             lines.append(f"{i}. **{artist}** — *{title}*"
                          + (f"  ({lic})" if lic else "") + warning)
             if url:
@@ -732,15 +762,32 @@ def selftest():
         {"name": "Deep One", "artist_name": "A",
          "shareurl": "https://www.jamendo.com/track/1",
          "audiodownload": "https://mp3l.jamendo.com/?trackid=1",
+         "audiodownload_allowed": True, "content_id_free": True,
          "license_ccurl": "http://creativecommons.org/licenses/by/3.0/"},
         {"name": "NC one", "artist_name": "B",
          "shareurl": "https://www.jamendo.com/track/2",
          "license_ccurl": "http://creativecommons.org/licenses/by-nc/3.0/"},
+        {"name": "No download", "artist_name": "C",
+         "shareurl": "https://www.jamendo.com/track/3", "audiodownload": "",
+         "audiodownload_allowed": False, "content_id_free": False,
+         "license_ccurl": "http://creativecommons.org/licenses/by-sa/4.0/"},
     ]})
-    jtracks = search_jamendo("house", client_id="test",
-                             opener=lambda url, timeout=0: _FakeResp(jam))
-    ok &= jtracks is not None and len(jtracks) == 1 and jtracks[0]["license"] == "CC-BY"
-    ok &= jtracks[0]["audio_url"].startswith("https://mp3l")
+    seen_urls = []
+
+    def _capture(url, timeout=0):
+        seen_urls.append(url)
+        return _FakeResp(jam)
+
+    jtracks = search_jamendo("house", client_id="test", opener=_capture)
+    # 2 usable of 3 (the NC one is dropped): the CC-BY and the no-download CC-BY-SA.
+    ok &= jtracks is not None and len(jtracks) == 2
+    ok &= jtracks[0]["license"] == "CC-BY" and jtracks[0]["audio_url"].startswith("https://mp3l")
+    ok &= jtracks[1]["download_allowed"] is False and jtracks[1]["content_id_free"] is False
+    # The request itself must ask for usable licences and not for the paid catalogue.
+    ok &= "ccnc=0" in seen_urls[0] and "ccnd=0" in seen_urls[0]
+    ok &= "prolicensing" not in seen_urls[0] and "probackground" not in seen_urls[0]
+    # We read content_id_free from the response instead of filtering on it.
+    ok &= "content_id_free=" not in seen_urls[0]
     ok &= search_jamendo("house", client_id="", opener=lambda *a, **k: None) is None
     # A bad key must say so, not look like an empty catalogue.
     jam_fail = json.dumps({"headers": {"status": "failed",
@@ -750,8 +797,9 @@ def selftest():
                            opener=lambda url, timeout=0: _FakeResp(jam_fail))
     ok &= jfail is None
     print(f"  jamendo         -> by/by-sa/zero accepted, nc/nd rejected; "
-          f"{len(jtracks) if jtracks else 0} of 2 kept, direct audio link present; "
-          f"bad key reported ({jfail is None})")
+          f"{len(jtracks) if jtracks else 0} of 3 kept (NC dropped), direct audio "
+          f"link present, no-download Content-ID flag surfaced; bad key reported "
+          f"({jfail is None})")
 
     # 3. Coherence: a clear majority filters, a thin field does not.
     many = ([{"genre": "Deep House"}] * 3) + [{"genre": "Tech House"}]
