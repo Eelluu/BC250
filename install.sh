@@ -706,8 +706,12 @@ pidfile="/run/queue-runner.pid"
 command_background="yes"
 
 start_pre() {
-    # Same stale-pidfile trap as llama-swap: after a hard death 'start' refuses
-    # ("already started") and the bot never comes back up.
+    # Two different failure modes get confused here, so both are spelled out:
+    #   * a stale $pidfile (the PID inside is gone) makes start-stop-daemon refuse
+    #     to start — this hook removes it in time;
+    #   * "has already been started" is NOT the pidfile: it is OpenRC's own state
+    #     file under /run/openrc/started, which survives the process dying, and no
+    #     hook can run in that case. The cure is `rc-service queue-runner zap`.
     if [ -f "$pidfile" ] && ! kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null; then
         ewarn "stale pidfile $pidfile (PID is gone): removing it"
         rm -f "$pidfile"

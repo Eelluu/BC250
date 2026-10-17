@@ -2214,6 +2214,78 @@ Per-minute sampling via `pp_dpm_sclk`:
 | **OOM protection** | Ollama `OOMScoreAdjust=-1000`, 16 GB NVMe swap, zram limited or disabled |
 | **Signal delivery** | `--best-effort-deliver` flag — delivery failures don't mark job as failed |
 
+### 7.9 Search and music — SearXNG + `music-discover.py`
+
+Two components that arrived together, because the music job needed a search backend
+that does not get throttled.
+
+**SearXNG (optional; `install.sh` sets it up)**
+
+`ddgr` scrapes DuckDuckGo directly, and this network answers it with HTTP 202: that
+turned every music run into "no results" and every research run into "No results
+found". SearXNG is a metasearch front-end in a podman container — one local service
+queries several engines and returns clean JSON, so a single engine sulking is
+survivable. Measured here: the job's query returns 20 results from google cse while
+brave reports "Suspended: too many requests" and duckduckgo answers with a CAPTCHA.
+
+| | |
+|---|---|
+| Install | `install.sh install` (step 12, it asks; `--no-searxng` skips it) |
+| Manage | `install.sh searxng check\|up\|down\|status\|test\|logs\|boot` |
+| Endpoint | `http://127.0.0.1:8890/search?q=...&format=json` — localhost only, verified with netstat |
+| Cost | 271 MB image, ~160 MB RSS, ~1% CPU, no GPU code path |
+| Fallback | the jobs fall back to ddgr when it does not answer |
+
+Two things only found by installing it: podman's default bridge needs `iptables` to
+program port forwarding and this box has none (`netavark: iptables: No such file or
+directory`), so the container runs with `--network=host`; and the official image lets
+its environment win over `settings.yml`, so `SEARXNG_PORT` and `GRANIAN_HOST` are what
+keep it off llama-swap's port and off the LAN.
+
+**`music-discover.py` (weekly house tracks)**
+
+Picks tracks that are safe to monetise and writes a Discord report with a ready
+`yt-dlp` command. Three sources, and the difference between them is the point:
+
+| Source | Catalogue | Licence |
+|---|---|---|
+| Jamendo (`JAMENDO_CLIENT_ID`) | its own Creative Commons catalogue | **verified**, per track |
+| SearXNG | SoundCloud — the CC-music community | **inferred** from the snippet |
+| ddgr | DuckDuckGo | inferred, and it throttles |
+
+Jamendo is a different catalogue, not the same songs with better paperwork, which is
+why `--source both` merges and labels each track instead of choosing. When *every*
+candidate carries a verified licence the model is not called at all: 40 tracks, with
+labels and Content-ID warnings, in one second, no GPU. Measured reason: given 40
+verified and 40 SoundCloud candidates in one list, the model returned eight SoundCloud
+ones and skipped every verified track — it was reading the titles that literally say
+"no copyright".
+
+Only CC-BY, CC-BY-SA, CC0 and the public domain mark pass. NonCommercial is out
+because an ad-carrying channel is commercial, and NoDerivatives is out because a mix
+is a derivative work; those two are filtered at the API *and* re-checked locally.
+`content_id_free` is reported rather than filtered, so a track that might trigger
+Content ID is visible before anything is uploaded.
+
+| Flags | |
+|---|---|
+| `--source auto\|both\|jamendo\|searxng\|ddgr` | where to look |
+| `--mix coherent\|wide` | one subgenre, or any house subgenre |
+| `--pages`, `--time-range` | how deep, and how recent (see below) |
+| `--curate` | let the model pick a musically coherent subset when licences are verified |
+
+Honest limits. A web index cannot deliver "uploaded this week": with
+`site:soundcloud.com`, `time_range=week` returns 0 results, `month` returns 2, and the
+full set of 20 is all older than a month — so the filter is a knob that defaults to
+off. And a Creative Commons licence does not imply a downloadable file: artists
+choose, and Jamendo blanks `audiodownload` when they say no, which the job detects per
+track rather than producing a download command that fetches nothing.
+
+For the record: this job never worked before. ddgr 2.2 caps `--num` at 25 and exits 2
+with nothing on stdout, so the request for 50 killed it in zero seconds on every
+scheduled run, and the report it was meant to DM never existed. It now says why it
+failed instead.
+
 ---
 
 ## 8. Career Intelligence
