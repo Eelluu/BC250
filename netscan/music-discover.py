@@ -347,8 +347,10 @@ safety is not clearly High. An empty licence field is not a licence.""")
     if has_verified:
         blocks.append("""LICENCES ALREADY VERIFIED (results WITH a "license" field):
 Those come from a Creative Commons catalogue and were checked there; NonCommercial
-and NoDerivatives are already filtered out. Do not second-guess that field — for
-these, judge only whether the track will work musically in the mix.""")
+and NoDerivatives are already filtered out. Do not second-guess that field, and do
+not require the title or description to mention a licence: most Creative Commons
+tracks have no such wording, and the field is the field. For these, judge only
+whether the track will work musically in the mix.""")
     criteria = "\n\n".join(blocks) or """Keep only tracks that are unambiguously safe
 to monetise, and discard anything you cannot vouch for."""
     return f"""You are a professional music curator for a YouTube house-mix channel.
@@ -443,6 +445,28 @@ def curate(results, llm=call_llm, data_dir=DATA_DIR, mix="coherent",
     coherence filter is only applied for "coherent", because in "wide" mode every
     subgenre is wanted.
     """
+    if has_verified and not has_inferred:
+        # Nothing to judge: every candidate already carries a licence checked
+        # against the catalogue, so the model would only add variance. Measured
+        # reason: with 40 verified Jamendo tracks and 40 SoundCloud candidates in
+        # one list, the model returned eight SoundCloud ones and skipped every
+        # verified track — it was picking the titles that literally say "no
+        # copyright", which is exactly the shortcut verified data is meant to
+        # remove.
+        log(f"all {len(results)} candidates carry a verified licence — not asking the "
+            f"model to judge them")
+        tracks = []
+        for r in results:
+            t = dict(r)
+            t["title"] = t.get("title") or "?"
+            t["artist"] = t.get("artist") or "?"
+            t["license_type"] = t.get("license") or ""
+            tracks.append(t)
+        if mix == "wide":
+            return tracks, f"{GENRE} (CC verificado)"
+        genre_label, tracks = pick_dominant_genre(tracks)
+        return tracks, genre_label
+
     user_prompt = f"Search Results:\n{json.dumps(results, indent=2)}"
     raw_reply = llm(build_prompt(GENRE, mix, has_verified, has_inferred), user_prompt,
                     temperature=0.2, max_tokens=4000, think=False)
@@ -907,6 +931,20 @@ def selftest():
     print(f"  enrichment      -> source={enriched[0]['source']}, "
           f"license_type={enriched[0]['license_type']!r} (verified beats the model's "
           f"guess), Content-ID flag and audio link recovered")
+
+    # 2f. Verified-only candidates: the model is not called at all, because there
+    # is nothing for it to judge and its answer only adds variance.
+    called = []
+    verified_cands = [{"url": "https://www.jamendo.com/track/1", "artist": "A",
+                       "title": "T1", "license": "CC-BY", "source": "jamendo",
+                       "audio_url": "https://mp3l/1.mp3", "type": "track"}]
+    vtracks, vgenre = curate(verified_cands, llm=lambda *a, **k: called.append(1),
+                             data_dir=tmp, mix="wide",
+                             has_verified=True, has_inferred=False)
+    ok &= vtracks is not None and len(vtracks) == 1 and not called
+    ok &= "verificado" in (vgenre or "") and vtracks[0]["license_type"] == "CC-BY"
+    print(f"  verified only   -> {len(vtracks) if vtracks else 0} track(s) with "
+          f"{len(called)} model call(s) (want 0), genre '{vgenre}'")
 
     # 3. Coherence: a clear majority filters, a thin field does not.
     many = ([{"genre": "Deep House"}] * 3) + [{"genre": "Tech House"}]
