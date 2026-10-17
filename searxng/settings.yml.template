@@ -1,0 +1,37 @@
+# SearXNG settings for the bc250 netscan jobs.
+#
+# Copied to /opt/searxng/settings.yml by searxng-setup.sh, which substitutes a
+# freshly generated secret_key for __SECRET__ and never overwrites an existing
+# file. The live file lives outside the repo on purpose: it holds a secret.
+#
+# use_default_settings keeps the packaged engine list (google, bing, duckduckgo,
+# brave, mojeek, wikipedia...), which is the whole point: if one engine decides to
+# answer with a captcha, the others still do.
+use_default_settings: true
+
+server:
+  secret_key: "__SECRET__"
+  # Host networking: only this machine can reach it, and nothing else on the host
+  # changes. See the note about iptables in searxng-setup.sh.
+  bind_address: "127.0.0.1"
+  port: 8890
+  # The jobs query this instance over localhost. SearXNG's bot detection answers
+  # 403 to API formats when it cannot see a browser, so it stays off: the service
+  # is not reachable from anywhere except this machine anyway.
+  limiter: false
+  image_proxy: false
+  public_instance: false
+
+search:
+  formats:
+    - html
+    - json                  # what the netscan jobs consume
+  safe_search: 0
+  default_lang: "en"
+  autocomplete: ""
+
+outgoing:
+  request_timeout: 6.0
+  max_request_timeout: 12.0
+  pool_connections: 10
+  pool_maxsize: 10

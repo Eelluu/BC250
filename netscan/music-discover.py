@@ -33,6 +33,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import urllib.parse
+import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -49,16 +51,31 @@ PLATFORMS = ["SoundCloud", "Bandcamp"]
 DDGR_MAX_RESULTS = 25
 DDGR_TIMEOUT_S = 120
 
+# SearXNG is the primary source: one local service queries several engines and
+# returns one clean JSON list, so an engine answering with a captcha is no longer
+# fatal. Set up by searxng/searxng-setup.sh; binds 127.0.0.1 only.
+SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://127.0.0.1:8890")
+SEARXNG_TIMEOUT_S = 40
+
 
 def log(msg):
     print(f"  {msg}", flush=True)
 
 
-def build_query(genre=GENRE, days=7):
-    """Strictly monetizable terms, this week, on SoundCloud."""
-    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+def search_terms(genre=GENRE):
+    """The query itself, without a date.
+
+    SearXNG takes the time window as a parameter (time_range=week) and ddgr has
+    no such thing, so only the ddgr flavour appends DuckDuckGo's after: operator.
+    """
     return (f'site:soundcloud.com "{genre}" ("no copyright" OR "commercial use" '
-            f'OR "royalty free" OR "CC-BY") after:{since}')
+            f'OR "royalty free" OR "CC-BY")')
+
+
+def build_query(genre=GENRE, days=7):
+    """The ddgr flavour: date in the query, because ddgr has no time_range."""
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    return f"{search_terms(genre)} after:{since}"
 
 
 def run_search(query, runner=subprocess.run, timeout=DDGR_TIMEOUT_S):
@@ -96,6 +113,48 @@ def run_search(query, runner=subprocess.run, timeout=DDGR_TIMEOUT_S):
         log(f"no search results this run{note}")
         return None
     return results
+
+
+def search_searxng(query, base=SEARXNG_URL, time_range=None, limit=DDGR_MAX_RESULTS,
+                   opener=None, timeout=SEARXNG_TIMEOUT_S):
+    """Ask the local SearXNG for JSON. Returns [{title,url,abstract}, ...] or None.
+
+    The reason this exists: ddgr gets throttled (HTTP 202) and there is nothing to
+    do about it from the client side. SearXNG aggregates several engines, so one
+    of them sulking is survivable — measured on this box the job's query returns
+    20 results from google cse while brave is "Suspended: too many requests" and
+    duckduckgo answers with a CAPTCHA.
+
+    `time_range` is off by default, and that is a measurement rather than a
+    preference: with site:soundcloud.com, week returns 0 results and month
+    returns 2, while year or no filter return the same 20 (all older than a
+    month). A web index simply does not have this week's uploads for a query that
+    narrow, so claiming "this week" would be a lie the report tells.
+
+    `opener` is injectable so the parsing and the failure modes are testable
+    without a running service.
+    """
+    params = {"q": query, "format": "json"}
+    if time_range:
+        params["time_range"] = time_range
+    url = f"{base.rstrip('/')}/search?{urllib.parse.urlencode(params)}"
+    opener = opener or urllib.request.urlopen
+    try:
+        with opener(url, timeout=timeout) as resp:
+            payload = json.loads(resp.read())
+    except Exception as ex:
+        log(f"searxng failed: {type(ex).__name__}: {ex}")
+        return None
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, list):
+        log("searxng answered without a results list")
+        return None
+    out = [{"title": r.get("title"),
+            "url": r.get("url"),
+            "abstract": (r.get("content") or "")[:400]}
+           for r in results if isinstance(r, dict) and r.get("url")]
+    log(f"searxng: {len(out)} result(s) from {len(results)} raw")
+    return out[:limit] or None
 
 
 SYSTEM_PROMPT = f"""You are a professional music copyright attorney and YouTube curator.
@@ -216,6 +275,38 @@ def pick_dominant_genre(tracks):
     return top_genre, tracks
 
 
+def download_kind(url):
+    """Is this a single track, or a set/profile/album yt-dlp would swallow whole?
+
+    Measured, and it matters for a monetised channel: of the first four tracks the
+    model picked, one was an artist profile and two were /sets/ playlists. The
+    download command would have pulled entire playlists, and "no copyright" in a
+    playlist title is not a per-track licence. Leads are still useful; they just
+    do not belong in an automatic download.
+    """
+    try:
+        parts = urllib.parse.urlparse(url)
+    except ValueError:
+        return "unknown"
+    host = (parts.hostname or "").lower()
+    seg = [p for p in parts.path.split("/") if p]
+    if not seg:
+        return "unknown"
+    if "soundcloud.com" in host:
+        if len(seg) == 1:
+            return "profile"
+        if seg[1] in ("sets", "playlists", "albums"):
+            return "set"
+        return "track"
+    if "bandcamp.com" in host:
+        if seg[0] == "track":
+            return "track"
+        if seg[0] in ("album", "sets"):
+            return "set"
+        return "unknown"
+    return "track"  # an unknown host is presumably a single page
+
+
 def write_report(tracks, genre_label=None, data_dir=DATA_DIR):
     """Write a Discord-friendly report: name + link per track, plus a ready
     yt-dlp command to download them ALL at once (owner checks before running).
@@ -233,46 +324,67 @@ def write_report(tracks, genre_label=None, data_dir=DATA_DIR):
         lines.append("No se encontraron pistas 100% seguras para monetización "
                      "esta semana.")
     else:
+        track_urls, other_urls = [], []
         for i, t in enumerate(tracks, 1):
             artist = (t.get("artist") or "?").strip()
             title = (t.get("title") or "?").strip()
             url = (t.get("url") or "").strip().replace('"', "")
             lic = (t.get("license_type") or "").strip()
-            lines.append(f"{i}. **{artist}** — *{title}*" + (f"  ({lic})" if lic else ""))
+            kind = download_kind(url) if url else "unknown"
+            warning = {"set": "  ⚠️ playlist — no entra en la descarga automática",
+                       "profile": "  ⚠️ perfil, no es una pista",
+                       "unknown": "  ⚠️ enlace no reconocido"}.get(kind, "")
+            lines.append(f"{i}. **{artist}** — *{title}*"
+                         + (f"  ({lic})" if lic else "") + warning)
             if url:
                 lines.append(f"   🔗 {url}")
+                (track_urls if kind == "track" else other_urls).append(url)
         lines += ["", "▶️ **Descarga todas de golpe** (revísalas antes de descargar):"]
-        urls = [t.get("url", "").strip().replace('"', "")
-                for t in tracks if t.get("url", "").strip()]
         # Keep the command under ~1800 chars so the DM code block is never split
         # mid-line by the 2000-char Discord limit (many tracks would break it).
         prefix = "yt-dlp --extract-audio --audio-format mp3 --audio-quality 0"
         cmd_parts, used = [], 0
-        for u in urls:
+        for u in track_urls:
             piece = f'"{u}"'
             if used + len(piece) + 1 > 1800:
                 break
             cmd_parts.append(piece)
             used += len(piece) + 1
         cmd = prefix + " " + " ".join(cmd_parts)
-        if len(cmd_parts) < len(urls):
-            cmd += (f"\n# …y {len(urls) - len(cmd_parts)} pista(s) más — ver "
+        if len(cmd_parts) < len(track_urls):
+            cmd += (f"\n# …y {len(track_urls) - len(cmd_parts)} pista(s) más — ver "
                     f"informe completo en el servidor")
         lines += ["```bash", cmd, "```"]
+        if other_urls:
+            lines.append(f"_{len(other_urls)} enlace(s) son playlists o perfiles: "
+                         f"revísalos a mano antes de descargar nada._")
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return report_path
 
 
-def search_tracks(data_dir=DATA_DIR, runner=subprocess.run, llm=call_llm):
-    """One weekly run. Returns the list of tracks (possibly empty) or None."""
+def search_tracks(data_dir=DATA_DIR, runner=subprocess.run, llm=call_llm,
+                  source="auto", searxng_url=SEARXNG_URL, opener=None,
+                  time_range=""):
+    """One weekly run. Returns the list of tracks (possibly empty) or None.
+
+    `source`: auto tries SearXNG first and falls back to ddgr; "searxng" and
+    "ddgr" force one, which is how you find out which half is unhappy.
+    """
     genre = GENRE
     print(f"🔎 Starting STRICT discovery for monetizable {genre}...")
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    query = build_query(genre)
-    print(f"  Searching: {query}")
-    results = run_search(query, runner=runner)
+    results = None
+    if source in ("auto", "searxng"):
+        print(f"  Searching SearXNG ({searxng_url}) for: {search_terms(genre)}"
+              f"{f' [time_range={time_range}]' if time_range else ''}")
+        results = search_searxng(search_terms(genre), base=searxng_url,
+                                 opener=opener, time_range=time_range)
+    if results is None and source in ("auto", "ddgr"):
+        query = build_query(genre)
+        print(f"  Searching ddgr for: {query}")
+        results = run_search(query, runner=runner)
     if results is None:
         return None
 
@@ -292,6 +404,22 @@ def search_tracks(data_dir=DATA_DIR, runner=subprocess.run, llm=call_llm):
 
 
 # ─── Selftest (offline: fixtures, no network, no model) ────
+
+
+class _FakeResp:
+    """Minimal stand-in for an urlopen() response."""
+
+    def __init__(self, body):
+        self.body = body
+
+    def read(self):
+        return self.body.encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
 
 class _FakeProc:
@@ -332,6 +460,22 @@ def selftest():
         print(f"    {label:<38} -> {'parsed' if got else 'None'} "
               f"{'OK' if got == want else 'FAIL'}")
 
+    # 1b. SearXNG: the JSON the local instance returns, and its failure modes.
+    sx = json.dumps({"results": [
+        {"title": "Deep One", "url": "https://soundcloud.com/a/1",
+         "content": "royalty free deep house"},
+        {"title": "no url here", "content": "dropped"},
+        {"title": "Deep Two", "url": "https://soundcloud.com/a/2", "content": ""},
+    ]})
+    got = search_searxng("q", opener=lambda url, timeout=0: _FakeResp(sx))
+    ok &= got is not None and len(got) == 2 and got[0]["url"].endswith("/1")
+    no_results = search_searxng("q", opener=lambda url, timeout=0: _FakeResp("{}"))
+    boom = search_searxng("q", opener=lambda url, timeout=0: (_ for _ in ()).throw(
+        OSError("connection refused")))
+    ok &= no_results is None and boom is None
+    print(f"  searxng         -> {len(got) if got else 0} of 3 kept (url-less dropped); "
+          f"no 'results' key -> {no_results}; down -> {boom}")
+
     # 2. The model reply parsing: bare array, array then chatter, wrapped, broken.
     # Two tracks come out, not three: the coherence filter keeps the Deep House
     # majority and drops the single Afro House one, which is its job.
@@ -357,6 +501,25 @@ def selftest():
     ok &= len(kept) == 1
     print(f"    {'no JSON at all':<26} -> rejected, raw kept: "
           f"{kept[0].name if kept else 'MISSING'}")
+
+    # 2b. Playlists and profiles must never reach the download command.
+    kinds = {"https://soundcloud.com/artist/track-name": "track",
+             "https://soundcloud.com/artist/sets/a-set": "set",
+             "https://soundcloud.com/artistname": "profile",
+             "https://artist.bandcamp.com/track/x": "track",
+             "https://artist.bandcamp.com/album/y": "set"}
+    bad = {u: (download_kind(u), want) for u, want in kinds.items()
+           if download_kind(u) != want}
+    ok &= not bad
+    mixed = [{"artist": "A", "title": "T", "url": "https://soundcloud.com/a/t"},
+             {"artist": "B", "title": "S", "url": "https://soundcloud.com/b/sets/s"}]
+    text_mixed = write_report(mixed, "Deep House", tmp).read_text(encoding="utf-8")
+    ok &= '"https://soundcloud.com/a/t"' in text_mixed
+    ok &= '"https://soundcloud.com/b/sets/s"' not in text_mixed
+    ok &= "revísalos a mano" in text_mixed
+    print(f"  download safety -> {len(kinds)} url shapes classified"
+          f"{'' if not bad else ' FAIL ' + str(bad)}; playlist kept out of the "
+          f"yt-dlp command, still listed as a lead")
 
     # 3. Coherence: a clear majority filters, a thin field does not.
     many = ([{"genre": "Deep House"}] * 3) + [{"genre": "Tech House"}]
@@ -396,12 +559,24 @@ def selftest():
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Weekly CC/royalty-free house music discovery")
     ap.add_argument("--data-dir", default=str(DATA_DIR))
+    ap.add_argument("--source", choices=("auto", "searxng", "ddgr"), default="auto",
+                    help="auto = local SearXNG first, ddgr as fallback")
+    ap.add_argument("--searxng-url", default=SEARXNG_URL)
+    ap.add_argument("--time-range", default="",
+                    choices=("", "day", "week", "month", "year"),
+                    help="recency filter. Empty by default because with "
+                         "site:soundcloud.com a week returns 0 results and a "
+                         "month returns 2, while the full set (20) is all older "
+                         "than a month: a web index does not have this week's "
+                         "uploads for a query this narrow")
     ap.add_argument("--selftest", action="store_true",
-                    help="offline checks: ddgr fixtures and a stubbed model")
+                    help="offline checks: ddgr and SearXNG fixtures, stubbed model")
     args = ap.parse_args(argv)
     if args.selftest:
         return selftest()
-    tracks = search_tracks(data_dir=args.data_dir)
+    tracks = search_tracks(data_dir=args.data_dir, source=args.source,
+                           searxng_url=args.searxng_url,
+                           time_range=args.time_range)
     # 0 on success (including "nothing safe this week"), 1 when the run could not
     # be completed at all — the scheduler and the DM step care about the difference.
     return 0 if tracks is not None else 1
