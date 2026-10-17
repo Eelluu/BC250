@@ -245,6 +245,15 @@ def search_jamendo(tags="house", client_id=None, limit=50, opener=None,
         return None
 
     results = payload.get("results") if isinstance(payload, dict) else None
+    # Jamendo reports a bad key inside the payload (headers.status = failed,
+    # error_message = "invalid client_id"). Without this the failure looks like
+    # "0 useful results", which sends you looking in entirely the wrong place.
+    headers = payload.get("headers") if isinstance(payload, dict) else None
+    if isinstance(headers, dict) and headers.get("status") not in (None, "success"):
+        log(f"jamendo rejected the request: "
+            f"{headers.get('error_message') or headers.get('status')} "
+            f"(check JAMENDO_CLIENT_ID in .env)")
+        return None
     if not isinstance(results, list):
         log("jamendo answered without a results list")
         return None
@@ -733,8 +742,16 @@ def selftest():
     ok &= jtracks is not None and len(jtracks) == 1 and jtracks[0]["license"] == "CC-BY"
     ok &= jtracks[0]["audio_url"].startswith("https://mp3l")
     ok &= search_jamendo("house", client_id="", opener=lambda *a, **k: None) is None
+    # A bad key must say so, not look like an empty catalogue.
+    jam_fail = json.dumps({"headers": {"status": "failed",
+                                       "error_message": "invalid client_id"},
+                           "results": []})
+    jfail = search_jamendo("house", client_id="bad",
+                           opener=lambda url, timeout=0: _FakeResp(jam_fail))
+    ok &= jfail is None
     print(f"  jamendo         -> by/by-sa/zero accepted, nc/nd rejected; "
-          f"{len(jtracks) if jtracks else 0} of 2 kept, direct audio link present")
+          f"{len(jtracks) if jtracks else 0} of 2 kept, direct audio link present; "
+          f"bad key reported ({jfail is None})")
 
     # 3. Coherence: a clear majority filters, a thin field does not.
     many = ([{"genre": "Deep House"}] * 3) + [{"genre": "Tech House"}]
