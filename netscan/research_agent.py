@@ -3,7 +3,7 @@
 Deep Research Agent — v1
 ========================
 Autonomous multi-step research with:
-- Web search (ddgr / curl)
+- Web search (SearXNG local, ddgr fallback)
 - File operations (read/write/list)
 - Command execution (sandboxed for non-whitelisted tools)
 - Progress updates via Discord thread callbacks
@@ -18,7 +18,6 @@ import shutil
 import time
 import urllib.request
 import urllib.parse
-from pathlib import Path
 
 # ─── Configuration ──────────────────────────────────────────────────────────
 RESEARCH_WORK_DIR = "/opt/netscan/data/research"
@@ -55,7 +54,7 @@ You have access to these tools. To use a tool, output EXACTLY one line in this f
 TOOL: <tool_name> | <arguments>
 
 Available tools:
-- web_search | <query>           — Search the web via DuckDuckGo (ddgr)
+- web_search | <query>           - Search the web via the local SearXNG (ddgr fallback)
 - web_fetch | <url>              — Fetch a webpage and extract text
 - run_cmd | <command>            — Execute a shell command (sandboxed if not whitelisted)
 - read_file | <path>             — Read a file's contents
@@ -149,7 +148,7 @@ def _send_progress(thread_channel, discord_send_fn, step, total, msg):
 def _build_summary(steps_log, query, elapsed_s):
     """Build a formatted recap of the research session."""
     lines = [
-        f"## 🔬 Research Summary",
+        "## 🔬 Research Summary",
         f"**Query:** {query}",
         f"**Duration:** {elapsed_s:.0f}s | **Steps:** {len(steps_log)}",
         "",
@@ -313,7 +312,7 @@ def _run_sandboxed(cmd, work_dir, timeout_s=RESEARCH_CMD_TIMEOUT_S):
     dangerous = [';', '&', '|', '>', '<', '`', '$', '\n', '\r']
     for d in dangerous:
         if d in cmd:
-            return f"[Sandboxed] Blocked: shell metacharacter not allowed in fallback sandbox"
+            return "[Sandboxed] Blocked: shell metacharacter not allowed in fallback sandbox"
     try:
         result = subprocess.run(
             cmd, shell=True, capture_output=True, text=True,
@@ -375,10 +374,44 @@ def _simplify_query(query):
     return q or query
 
 
+def _searxng_search(query, max_results=5, timeout=25):
+    """Search through the local SearXNG instance. Returns formatted text.
+
+    SearXNG aggregates several engines, and that matters here: ddgr scrapes
+    DuckDuckGo directly and this network gets HTTP 202 from it, so every research
+    run used to end in "No results found". Installed by install.sh and bound to
+    127.0.0.1 (see searxng/searxng-setup.sh).
+    """
+    base = os.environ.get("SEARXNG_URL", "http://127.0.0.1:8890")
+    params = urllib.parse.urlencode({"q": query, "format": "json"})
+    req = urllib.request.Request(f"{base.rstrip('/')}/search?{params}",
+                                 headers={"User-Agent": "bc250-research/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        payload = json.loads(resp.read())
+    lines = []
+    for r in ((payload or {}).get("results") or [])[:max_results]:
+        url = (r.get("url") or "").strip()
+        if not url:
+            continue
+        title = re.sub(r"\s+", " ", (r.get("title") or "")).strip()
+        snippet = re.sub(r"\s+", " ", (r.get("content") or "")).strip()
+        lines.append(f"{title}\n{url}\n{snippet}".strip())
+    return "\n\n".join(lines)
+
+
 def _web_search(query, max_results=5):
-    """Search the web using ddgr (DuckDuckGo).
-    Uses list args (no shell), so query is safe by construction."""
+    """Search the web: the local SearXNG first, ddgr as a fallback.
+
+    Both paths hand the query over as an argument list or a URL parameter, never
+    through a shell, so it stays safe by construction.
+    """
     query = _simplify_query(query)
+    try:
+        text = _searxng_search(query, max_results)
+        if text:
+            return text
+    except Exception:
+        pass  # not fatal: fall through to ddgr, exactly as before this change
     try:
         result = subprocess.run(
             ["ddgr", "--np", "-n", str(max_results), query],
@@ -389,7 +422,7 @@ def _web_search(query, max_results=5):
             return f"No results found for: {query}"
         return output
     except FileNotFoundError:
-        return "[Error] ddgr not installed. Run: apk add ddgr"
+        return "[Error] no search backend: SearXNG did not answer and ddgr is not installed"
     except Exception as e:
         return f"[Error] Search failed: {e}"
 

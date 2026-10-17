@@ -14,15 +14,23 @@ Usage:
 Output: /opt/netscan/data/market/think/<ticker>-YYYYMMDD.json
 """
 
-import argparse, json, os, sys, time, urllib.request, urllib.error
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from llm_sanitize import sanitize_llm_output, call_llm
 
 # ── Config ─────────────────────────────────────────────────────────────────
 
-# LLM Proxy (llama-swap / OpenAI format) via llm_sanitize
-LLM_MODEL = "gemma4-26b-q3"
+# LLM endpoint/model come from the environment via llm_sanitize
+# (LLM_URL / LLM_MODEL), exactly as the bot does it.
+LLM_MODEL = os.environ.get("LLM_MODEL", "")
 
 THINK_DIR    = Path("/opt/netscan/data/market/think")
 MARKET_DIR   = Path("/opt/netscan/data/market")
@@ -56,154 +64,88 @@ TICKERS = {
 def log(msg):
     print(f"  {msg}", flush=True)
 
+def _yahoo_chart(symbol, rng="1mo", interval="1d", timeout=20):
+    """Fetch a Yahoo Finance chart series with urllib only.
 
-def signal_send(msg):
-    """Send a message via Signal JSON-RPC."""
-    try:
-        payload = json.dumps({
-            "jsonrpc": "2.0", "method": "send",
-            "params": {"account": SIGNAL_FROM, "recipient": [SIGNAL_TO], "message": msg},
-            "id": "market-think",
-        }).encode()
-        req = urllib.request.Request(SIGNAL_RPC, data=payload,
-            headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=15)
-        log(f"Signal alert sent ({len(msg)} chars)")
-    except Exception as e:
-        log(f"Signal send failed: {e}")
-
-
-def call_ollama(system_prompt, user_prompt, temperature=0.5, max_tokens=4000, think=True):
-    """Call Ollama for LLM analysis. think=True enables chain-of-thought."""
-    try:
-        with urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=10) as r:
-            tags = json.loads(r.read())
-            models = [m["name"] for m in tags.get("models", [])]
-            if not any(OLLAMA_MODEL in m for m in models):
-                log(f"Model {OLLAMA_MODEL} not found")
-                return None
-    except Exception as e:
-        log(f"Ollama health check failed: {e}")
-        return None
-
-    # /nothink disables CoT; omitting it enables deep reasoning
-    prefix = "" if think else "/nothink\n"
-
-    payload = json.dumps({
-        "model": OLLAMA_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prefix + user_prompt},
-        ],
-        "stream": False,
-        "options": {
-            "temperature": temperature,
-            "num_predict": max_tokens,
-            "num_ctx": 24576,
-        },
-    }).encode()
-
-    req = urllib.request.Request(OLLAMA_CHAT, data=payload,
-        headers={"Content-Type": "application/json"})
-
-    t0 = time.time()
-    try:
-        with urllib.request.urlopen(req, timeout=900) as resp:
-            result = json.loads(resp.read())
-            content = result.get("message", {}).get("content", "")
-            elapsed = time.time() - t0
-            tokens = result.get("eval_count", len(content.split()))
-            tps = tokens / elapsed if elapsed > 0 else 0
-            # Strip <think>...</think> CoT block, keep only the analysis
-            if "</think>" in content:
-                content = content.split("</think>", 1)[1].strip()
-            content = sanitize_llm_output(content)
-            log(f"LLM: {elapsed:.0f}s, {tokens} tok ({tps:.1f} t/s)")
-            return content
-    except Exception as e:
-        log(f"Ollama call failed: {e}")
-        return None
-
-
-# ── Data fetcher ───────────────────────────────────────────────────────────
+    yfinance is not installed on this box and would drag pandas and numpy in for a
+    handful of numbers; this is the endpoint yfinance calls under the hood, and it
+    needs no key. Returns (meta, timestamps, quote).
+    """
+    url = ("https://query1.finance.yahoo.com/v8/finance/chart/"
+           f"{urllib.parse.quote(symbol)}?range={rng}&interval={interval}")
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        payload = json.loads(resp.read())
+    result = (((payload or {}).get("chart") or {}).get("result") or [None])[0]
+    if not result:
+        raise ValueError(f"no chart data for {symbol}")
+    quote = ((result.get("indicators") or {}).get("quote") or [{}])[0]
+    return result.get("meta") or {}, result.get("timestamp") or [], quote
 
 def fetch_ticker_data(ticker_info):
-    """Fetch comprehensive data for one ticker via yfinance."""
-    import yfinance as yf
-    import warnings
-    warnings.filterwarnings("ignore")
+    """Fetch comprehensive data for one ticker, without yfinance.
 
+    Returns the same dict shape the prompts expect. The only field the chart
+    endpoint does not carry is market_cap, and the prompt already treats it as
+    optional.
+    """
     symbol = ticker_info["symbol"]
     log(f"Fetching {symbol}...")
 
+    data = {
+        "symbol": symbol,
+        "name": ticker_info["name"],
+        "sector": ticker_info["sector"],
+        "type": ticker_info["type"],
+    }
+
     try:
-        t = yf.Ticker(symbol)
-        fi = t.fast_info
-
-        data = {
-            "symbol": symbol,
-            "name": ticker_info["name"],
-            "sector": ticker_info["sector"],
-            "type": ticker_info["type"],
-        }
-
-        # Current price
-        current = float(fi.last_price) if hasattr(fi, 'last_price') and fi.last_price else None
-        prev_close = float(fi.previous_close) if hasattr(fi, 'previous_close') and fi.previous_close else None
-
-        if current is None:
-            hist = t.history(period="5d")
-            if not hist.empty:
-                current = float(hist['Close'].iloc[-1])
-                if len(hist) >= 2:
-                    prev_close = float(hist['Close'].iloc[-2])
-
-        if current is None:
-            data["error"] = "no_price"
-            return data
-
-        data["price"] = round(current, 4)
-        data["prev_close"] = round(prev_close, 4) if prev_close else None
-
-        if prev_close and prev_close > 0:
-            data["day_change_pct"] = round(((current - prev_close) / prev_close) * 100, 2)
-        else:
-            data["day_change_pct"] = 0
-
-        # 30-day history for trends
-        try:
-            hist30 = t.history(period="1mo")
-            if not hist30.empty:
-                closes = [round(float(c), 4) for c in hist30['Close'].values]
-                data["history_30d"] = closes
-                data["high_30d"] = round(float(hist30['High'].max()), 4)
-                data["low_30d"] = round(float(hist30['Low'].min()), 4)
-                data["avg_volume_30d"] = int(hist30['Volume'].mean()) if hist30['Volume'].mean() > 0 else None
-                if len(closes) >= 2:
-                    data["change_30d_pct"] = round(((closes[-1] - closes[0]) / closes[0]) * 100, 2)
-        except Exception:
-            pass
-
-        # Market cap and metadata
-        try:
-            data["market_cap"] = getattr(fi, 'market_cap', None)
-            data["currency"] = getattr(fi, 'currency', 'USD') or 'USD'
-            data["exchange"] = getattr(fi, 'exchange', '?') or '?'
-            data["year_high"] = float(fi.year_high) if hasattr(fi, 'year_high') and fi.year_high else None
-            data["year_low"] = float(fi.year_low) if hasattr(fi, 'year_low') and fi.year_low else None
-        except Exception:
-            pass
-
-        log(f"  {ticker_info['name']}: {current:.4f} ({data.get('day_change_pct', 0):+.2f}% day, "
-            f"{data.get('change_30d_pct', 'N/A')}% 30d)")
+        meta, _timestamps, quote = _yahoo_chart(symbol)
+    except Exception as e:
+        log(f"  {symbol}: ERROR - {e}")
+        data["error"] = str(e)[:200]
         return data
 
-    except Exception as e:
-        log(f"  {symbol}: ERROR — {e}")
-        return {"symbol": symbol, "name": ticker_info["name"], "error": str(e)[:200]}
+    closes = [float(c) for c in (quote.get("close") or []) if c is not None]
+    highs = [float(c) for c in (quote.get("high") or []) if c is not None]
+    lows = [float(c) for c in (quote.get("low") or []) if c is not None]
+    volumes = [int(v) for v in (quote.get("volume") or []) if v]
 
+    current = meta.get("regularMarketPrice")
+    prev_close = meta.get("chartPreviousClose")
+    if current is None and closes:
+        current = closes[-1]
+    if prev_close is None and len(closes) >= 2:
+        prev_close = closes[-2]
+    if current is None:
+        data["error"] = "no_price"
+        return data
 
-# ── Sector-specific deep analysis prompts ──────────────────────────────────
+    data["price"] = round(float(current), 4)
+    data["prev_close"] = round(float(prev_close), 4) if prev_close else None
+    data["day_change_pct"] = (round(((float(current) - float(prev_close)) / float(prev_close)) * 100, 2)
+                              if prev_close else 0)
+    data["currency"] = meta.get("currency") or "USD"
+    data["exchange"] = (meta.get("fullExchangeName")
+                        or meta.get("exchangeName") or "?")
+    data["year_high"] = meta.get("fiftyTwoWeekHigh")
+    data["year_low"] = meta.get("fiftyTwoWeekLow")
+
+    if closes:
+        data["history_30d"] = [round(c, 4) for c in closes]
+        if highs:
+            data["high_30d"] = round(max(highs), 4)
+        if lows:
+            data["low_30d"] = round(min(lows), 4)
+        if volumes:
+            data["avg_volume_30d"] = int(sum(volumes) / len(volumes))
+        if len(closes) >= 2:
+            data["change_30d_pct"] = round(((closes[-1] - closes[0]) / closes[0]) * 100, 2)
+
+    log(f"  {ticker_info['name']}: {float(current):.4f} "
+        f"({data.get('day_change_pct', 0):+.2f}% day, "
+        f"{data.get('change_30d_pct', 'N/A')}% 30d)")
+    return data
 
 def get_ticker_prompt(slug, ticker_info, data):
     """Build a deep analysis prompt tailored to the asset's sector."""
@@ -389,7 +331,6 @@ Target: 300-500 words. English only."""
 
     return system, user
 
-
 # ── Per-ticker think ───────────────────────────────────────────────────────
 
 def think_one_ticker(slug):
@@ -422,10 +363,15 @@ def think_one_ticker(slug):
     if data.get("error"):
         log(f"Data fetch issue: {data['error']} — proceeding with limited context")
 
-    # 2. Deep LLM analysis with chain-of-thought
+    # 2. Deep LLM analysis. Thinking is the product here, so it stays on — but the
+    # budget has to fit it: measured on this box, 4000 tokens with thinking on can
+    # be spent entirely on the chain of thought, and the model then returns nothing
+    # at all. For prose the model writes "thinking + answer", so the answer needs
+    # room after the thinking.
     log("\n── Deep analysis (chain-of-thought enabled) ──")
     system, user = get_ticker_prompt(slug, ticker_info, data)
-    analysis = call_llm(system, user, temperature=0.5, max_tokens=4000)
+    analysis = sanitize_llm_output(call_llm(system, user, temperature=0.5,
+                                            max_tokens=8000, think=True))
 
     if not analysis:
         log("LLM analysis failed")
@@ -467,7 +413,6 @@ def think_one_ticker(slug):
     with open(out_file, "w") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
     log(f"\nSaved: {out_file.name} ({out_file.stat().st_size:,} bytes) in {elapsed:.0f}s")
-
 
 # ── Summary aggregation ───────────────────────────────────────────────────
 
@@ -549,7 +494,8 @@ Create an EXECUTIVE MARKET INTELLIGENCE BRIEF:
 Be concise but specific. Target: 600-900 words. English only."""
 
     log("\n── Running summary analysis (chain-of-thought) ──")
-    summary = call_llm(system, user, temperature=0.4, max_tokens=5000)
+    summary = sanitize_llm_output(call_llm(system, user, temperature=0.4,
+                                           max_tokens=6000, think=True))
 
     if not summary:
         log("Summary LLM call failed")
@@ -599,7 +545,6 @@ Be concise but specific. Target: 600-900 words. English only."""
 
     log(f"\nSummary complete in {elapsed:.0f}s")
 
-
 # ── Main ──────────────────────────────────────────────────────────────────
 
 def main():
@@ -621,7 +566,6 @@ def main():
         think_summary()
     else:
         think_one_ticker(args.ticker)
-
 
 if __name__ == "__main__":
     main()
