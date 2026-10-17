@@ -273,6 +273,13 @@ def search_jamendo(tags="house", client_id=None, limit=50, opener=None,
     if not isinstance(results, list):
         log("jamendo answered without a results list")
         return None
+    if not results:
+        # Seen live: the identical query returned 40 tracks and, a minute later, an
+        # empty set — a hiccup on their side. Say so, rather than "0 usable
+        # results", which reads like the catalogue had nothing to offer.
+        log("jamendo returned an empty result set (transient hiccup, or the tags are "
+            "too narrow) — retry, or try other --jamendo-tags")
+        return None
 
     out, rejected, no_download = [], 0, 0
     for r in results:
@@ -436,8 +443,29 @@ def _enrich(tracks, candidates):
     return tracks
 
 
+TASTE_PROMPT = """You are curating one continuous DJ mix from a pool of house tracks.
+
+Every track in the pool is already cleared for monetisation: the licences are
+verified Creative Commons (CC-BY, CC-BY-SA or CC0), there are no NonCommercial or
+NoDerivatives tracks, and every entry carries its verified licence in a "license"
+field. Do not comment on licences and do not second-guess that field — that question
+is settled, which is precisely why this task exists: the only thing left to judge is
+the music.
+
+Your job:
+- Pick 10-15 tracks that could sit together in one continuous mix: consistent tempo
+  and energy, no jarring mood changes, one coherent subgenre.
+- Order them the way you would play them.
+- Give each a one-line note about its vibe, enough for someone to decide.
+
+Answer with ONE JSON array and nothing else:
+[{"artist": "...", "title": "...", "url": "...",
+   "license_type": "<copy the license field>", "monetization_safety": "verified",
+   "reason": "<one line about the vibe>", "genre": "<the subgenre>"}]"""
+
+
 def curate(results, llm=call_llm, data_dir=DATA_DIR, mix="coherent",
-           has_verified=False, has_inferred=True):
+           has_verified=False, has_inferred=True, taste=False):
     """Ask the model to filter the candidates. Returns (tracks, genre) or (None, None).
 
     An empty list means "nothing safe this week", which is a valid answer; None
@@ -446,22 +474,39 @@ def curate(results, llm=call_llm, data_dir=DATA_DIR, mix="coherent",
     subgenre is wanted.
     """
     if has_verified and not has_inferred:
-        # Nothing to judge: every candidate already carries a licence checked
-        # against the catalogue, so the model would only add variance. Measured
-        # reason: with 40 verified Jamendo tracks and 40 SoundCloud candidates in
-        # one list, the model returned eight SoundCloud ones and skipped every
-        # verified track — it was picking the titles that literally say "no
-        # copyright", which is exactly the shortcut verified data is meant to
-        # remove.
-        log(f"all {len(results)} candidates carry a verified licence — not asking the "
-            f"model to judge them")
-        tracks = []
-        for r in results:
-            t = dict(r)
-            t["title"] = t.get("title") or "?"
-            t["artist"] = t.get("artist") or "?"
-            t["license_type"] = t.get("license") or ""
-            tracks.append(t)
+        # Nothing to judge about licences here: every candidate was checked against
+        # the catalogue, so asking the model about them only adds variance. Measured
+        # reason: given 40 verified and 40 SoundCloud candidates in one list, the
+        # model returned eight SoundCloud ones and skipped every verified track — it
+        # was reading the titles that literally say "no copyright".
+        #
+        # --curate asks it about the music instead, which is the part it is good at.
+        tracks = None
+        if taste:
+            log(f"{len(results)} candidates are already verified — asking the model "
+                f"about the music only, not the licences")
+            raw_reply = llm(TASTE_PROMPT,
+                            f"Pool of {len(results)} tracks:\n{json.dumps(results, indent=2)}",
+                            temperature=0.4, max_tokens=3000, think=False)
+            try:
+                tracks = track_list(extract_json(raw_reply))
+            except json.JSONDecodeError as ex:
+                log(f"the model's curation had no usable JSON ({ex})")
+                tracks = None
+            if tracks:
+                tracks = _enrich([t for t in tracks if isinstance(t, dict)], results)
+                log(f"curated to {len(tracks)} track(s); verified metadata reattached")
+            else:
+                log("curation unusable — falling back to the whole verified pool")
+        if tracks is None:
+            log(f"using all {len(results)} verified candidates as they came")
+            tracks = []
+            for r in results:
+                t = dict(r)
+                t["title"] = t.get("title") or "?"
+                t["artist"] = t.get("artist") or "?"
+                t["license_type"] = t.get("license") or ""
+                tracks.append(t)
         if mix == "wide":
             return tracks, f"{GENRE} (CC verificado)"
         genre_label, tracks = pick_dominant_genre(tracks)
@@ -636,7 +681,7 @@ def write_report(tracks, genre_label=None, data_dir=DATA_DIR):
 def search_tracks(data_dir=DATA_DIR, runner=subprocess.run, llm=call_llm,
                   source="auto", searxng_url=SEARXNG_URL, opener=None,
                   time_range="", pages=2, max_candidates=40, mix="coherent",
-                  jamendo_tags=None, jamendo_client_id=None):
+                  jamendo_tags=None, jamendo_client_id=None, curate_taste=False):
     """One weekly run. Returns the list of tracks (possibly empty) or None.
 
     `source`: auto goes Jamendo (verified CC licences) -> local SearXNG -> ddgr,
@@ -693,7 +738,7 @@ def search_tracks(data_dir=DATA_DIR, runner=subprocess.run, llm=call_llm,
     print(f"  Analyzing {len(results)} candidates for MONETIZATION...")
     tracks, genre_label = curate(results, llm=llm, data_dir=data_dir, mix=mix,
                                  has_verified=has_verified,
-                                 has_inferred=has_inferred)
+                                 has_inferred=has_inferred, taste=curate_taste)
     if tracks is None:
         print("❌ The model's curation could not be used (raw reply kept).")
         return None
@@ -946,6 +991,25 @@ def selftest():
     print(f"  verified only   -> {len(vtracks) if vtracks else 0} track(s) with "
           f"{len(called)} model call(s) (want 0), genre '{vgenre}'")
 
+    # 2g. --curate on a verified pool: the model is asked about the music only, and
+    # if its answer is unusable the whole pool is used instead of nothing.
+    taste_prompts = []
+
+    def _taste_llm(system, user, **kw):
+        taste_prompts.append(system)
+        return good_reply
+
+    ttracks, _tgenre = curate(verified_cands, llm=_taste_llm, data_dir=tmp, mix="wide",
+                              has_verified=True, has_inferred=False, taste=True)
+    asked_about_music = bool(taste_prompts) and "Do not comment on licences" in taste_prompts[0]
+    ok &= ttracks is not None and asked_about_music
+    fb, _fgenre = curate(verified_cands, llm=lambda *a, **k: "no json at all",
+                         data_dir=tmp, mix="wide", has_verified=True,
+                         has_inferred=False, taste=True)
+    ok &= fb is not None and len(fb) == len(verified_cands)
+    print(f"  --curate        -> asked about the music only ({asked_about_music}); an "
+          f"unusable reply falls back to the whole verified pool ({len(fb)} track(s))")
+
     # 3. Coherence: a clear majority filters, a thin field does not.
     many = ([{"genre": "Deep House"}] * 3) + [{"genre": "Tech House"}]
     label, kept = pick_dominant_genre(many)
@@ -1007,6 +1071,11 @@ def main(argv=None):
                     help="coherent = one subgenre, as this job has always done "
                          "(and the reason a pool of 26 tracks yields 3); wide = "
                          "keep any house subgenre, same strict licence filter")
+    ap.add_argument("--curate", dest="curate_taste", action="store_true",
+                    help="when the licences are already verified, ask the model to "
+                         "pick a musically coherent subset (it judges the music, "
+                         "not the licensing). Without it, verified candidates are "
+                         "reported as they come, which is instant and deterministic")
     ap.add_argument("--selftest", action="store_true",
                     help="offline checks: ddgr and SearXNG fixtures, stubbed model")
     args = ap.parse_args(argv)
@@ -1016,7 +1085,8 @@ def main(argv=None):
                            searxng_url=args.searxng_url,
                            time_range=args.time_range, pages=args.pages,
                            max_candidates=args.max_candidates, mix=args.mix,
-                           jamendo_tags=args.jamendo_tags)
+                           jamendo_tags=args.jamendo_tags,
+                           curate_taste=args.curate_taste)
     # 0 on success (including "nothing safe this week"), 1 when the run could not
     # be completed at all — the scheduler and the DM step care about the difference.
     return 0 if tracks is not None else 1
