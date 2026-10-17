@@ -82,9 +82,35 @@ class Remote:
         argv = ["scp", "-P", str(self.port)] + list(SSH_OPTS[2:])
         if self.key:
             argv += ["-i", self.key]
-        argv += (["-r", src, f"{self.target()}:{dst}"] if direction == "put"
-                 else [f"{self.target()}:{src}", dst])
-        return subprocess.run(argv, text=True).returncode
+
+        if direction == "get":
+            return subprocess.run(argv + [f"{self.target()}:{src}", dst], text=True).returncode
+
+        # Upload to a temporary name and rename into place.
+        #
+        # Learned the hard way: replacing a file that a running script is still
+        # reading makes the interpreter read a torn mix of old and new — bash reads
+        # scripts as it executes them — and the symptom is a bewildering "exit 127,
+        # command not found" three minutes into a run that was fine. An atomic
+        # rename cannot be observed half-done.
+        #
+        # While it is here, it also strips CR from text files: a Windows checkout is
+        # CRLF, Python tolerates that and bash does not.
+        base = os.path.basename((src.rstrip("/\\")) or "file")
+        is_dir = dst.endswith("/")
+        target_dir = dst if is_dir else (os.path.dirname(dst) or ".")
+        final = f"{target_dir.rstrip('/')}/{base}" if is_dir else dst
+        tmp = f"{target_dir.rstrip('/')}/.{base}.uploading"
+
+        code = subprocess.run(argv + ["-r", src, f"{self.target()}:{tmp}"],
+                              text=True).returncode
+        if code:
+            return code
+        strip_cr = ("sed -i 's/\\r$//' " if base.endswith(
+            (".py", ".sh", ".json", ".yaml", ".yml", ".md", ".txt", ".env", ".template"))
+            else "true ")
+        return self.run(f"mv -f '{tmp}' '{final}' && {strip_cr}'{final}' "
+                        f"|| mv -f '{tmp}' '{final}'; ls -l '{final}'")
 
     def check(self):
         """Connection + key sanity, without touching anything on the box."""
