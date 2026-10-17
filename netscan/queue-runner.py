@@ -3329,32 +3329,55 @@ def save_state(state):
         with open(STATE_FILE, 'w') as f: json.dump(state, f)
     except: pass
 
-def _maybe_send_report(name, job):
+def _job_output_tail(res, lines=15, limit=1800):
+    """Last lines of a job's stdout+stderr, for a report or an error notice."""
+    if res is None:
+        return ""
+    blob = ((res.stdout or "") + (res.stderr or "")).strip()
+    if not blob:
+        return ""
+    return "\n".join(blob.splitlines()[-max(1, lines):])[-limit:]
+
+
+def _maybe_send_report(name, job, res=None):
     """After a job succeeds, DM its report to the owner IF the job declares one
-    via jobs.json:  "report": {"file": "/path/report.txt", "title": "..."}
+    via jobs.json:
+
+        "report": {"file": "/path/report.txt", "title": "..."}   # a file it wrote
+        "report": {"output": true, "title": "...", "tail": 20}   # its own output
+
     Opt-in per job, so only 'important' report-producing jobs notify Discord
-    (hardware/health scanners simply omit the field)."""
+    (hardware/health scanners simply omit the field).
+
+    The `output` form exists because the bot already captures every job's stdout
+    and stderr and then threw it away, which is why a failure notice could only say
+    "exit 127, check the log" while the reason sat in the captured output."""
     report = job.get("report") or {}
-    report_file = (report.get("file") or "").strip()
-    if not report_file:
-        return
-    # Support a glob so jobs can point at dated files (latest-*.md etc.)
-    paths = sorted(glob.glob(report_file)) if glob.has_magic(report_file) else []
-    if not paths and os.path.isfile(report_file):
-        paths = [report_file]
-    if not paths:
-        log(f"  ⚠️ Report file not found for {name}: {report_file}")
-        return
-    title = (report.get("title") or "📋 Informe").strip()
+    title = (report.get("title") or f"📋 {name}").strip()
     parts = []
-    for p in paths:
-        try:
-            with open(p, encoding="utf-8", errors="replace") as f:
-                txt = f.read().strip()
-            if txt:
-                parts.append(txt)
-        except Exception as e:
-            log(f"  ⚠️ Could not read report for {name}: {p} ({e})")
+
+    if report.get("output") or report.get("tail"):
+        out = _job_output_tail(res, int(report.get("tail") or 15))
+        if out:
+            parts.append(out)
+
+    report_file = (report.get("file") or "").strip()
+    if report_file:
+        # Support a glob so jobs can point at dated files (latest-*.md etc.)
+        paths = sorted(glob.glob(report_file)) if glob.has_magic(report_file) else []
+        if not paths and os.path.isfile(report_file):
+            paths = [report_file]
+        if not paths:
+            log(f"  ⚠️ Report file not found for {name}: {report_file}")
+        for p in paths:
+            try:
+                with open(p, encoding="utf-8", errors="replace") as f:
+                    txt = f.read().strip()
+                if txt:
+                    parts.append(txt)
+            except Exception as e:
+                log(f"  ⚠️ Could not read report for {name}: {p} ({e})")
+
     if not parts:
         return
     msg = f"{title}\n\n" + "\n\n".join(parts)
@@ -3413,10 +3436,19 @@ def run_job(job, state):
             # Success — deliver the job's report to the owner if the job declares
             # one (jobs.json 'report' config; opt-in per job so only 'important'
             # report-producing jobs DM, not the hardware scanners).
-            _maybe_send_report(name, job)
+            _maybe_send_report(name, job, res)
         else:
-            # NOTIFICACIÓN DE FALLO POR DISCORD
-            error_msg = f"❌ **ERROR EN JOB:** `{name}`\nEl script ha terminado con código de error {res.returncode}.\nRevisa `/opt/netscan/data/queue-runner.log` para más detalles."
+            # NOTIFICACIÓN DE FALLO POR DISCORD — carrying the job's own last lines.
+            # "exit 127, check the log" is not actionable; the reason was in the
+            # captured output all along and simply never made it into the message.
+            tail = _job_output_tail(res, 20, 1500)
+            error_msg = (f"❌ **ERROR EN JOB:** `{name}`\n"
+                         f"El script ha terminado con código de error {res.returncode}.")
+            if tail:
+                error_msg += f"\n```\n{tail}\n```"
+            else:
+                error_msg += ("\n(sin salida; revisa "
+                              "`/opt/netscan/data/queue-runner.log`)")
             _dm_owner(error_msg)
         # If we woke llama-swap for this job in sleep mode, stop it again
         if _sleep_woken:
