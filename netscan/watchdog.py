@@ -54,7 +54,26 @@ RECIPIENT   = "+<OWNER_PHONE>"
 
 DASHBOARD   = "http://127.0.0.1:8888/"
 SUBNET      = "192.168."          # prefix filter for the local network
-GATEWAY_IP  = "192.168.1.254"
+def _default_gateway():
+    """Default gateway, read from the routing table.
+
+    This used to be a hardcoded 192.168.1.254 from the previous network, so a box
+    whose LAN had moved to 192.168.0.0/24 reported an unreachable gateway and an
+    offline device on every run: two permanent alerts, one of them critical, for
+    addresses that belong to nobody on that network.
+    """
+    try:
+        out = subprocess.run(["ip", "route", "show", "default"],
+                             capture_output=True, text=True, timeout=5).stdout
+        m = re.search(r"default via (\d+\.\d+\.\d+\.\d+)", out)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return "192.168.0.1"
+
+
+GATEWAY_IP  = _default_gateway()
 
 # Device types whose absence triggers HIGH alert
 CRITICAL_DEVICE_TYPES = {"server", "network"}
