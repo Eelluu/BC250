@@ -84,6 +84,54 @@ MODE_WAKE_KEYWORDS = ('despertar', 'encender bot', 'wake up', 'bot on', 'activar
 SMART_MODE_CURFEW_HOUR = int(os.environ.get("SMART_MODE_CURFEW_HOUR", "1"))  # 1 = 1:00 AM
 # Current mode: 'assistant' (default), 'smart', or 'sleep'
 _current_mode = 'assistant'
+_last_mode = _current_mode
+
+
+def _prune_tmp(max_age_days=1):
+    """Delete this project's stale temp files.
+
+    Narrow on purpose: only the patterns this project writes, only files older than
+    a day, and it returns what it freed so the caller logs it instead of deleting
+    things silently.
+    """
+    freed = count = 0
+    cutoff = time.time() - max_age_days * 86400
+    for pattern in ("yt-dlp*", "netscan-*", "*.part", "*.ytdl", "sd-preview-*"):
+        for path in glob.glob(os.path.join("/tmp", pattern)):
+            try:
+                st = os.stat(path)
+                if not os.path.isfile(path) or st.st_mtime > cutoff:
+                    continue
+                os.remove(path)
+                freed += st.st_size
+                count += 1
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                log(f"  tmp: {path}: {e}")
+    return freed, count
+
+
+def _on_mode_change(old, new):
+    """Clean up after a mode switch.
+
+    drop_caches frees page cache, dentries and inodes, not files - worth being
+    precise about, because a leftover file in /tmp survives it. The prune below is
+    what actually removes leftovers; the cache drop is cheap and was asked for.
+    """
+    log(f"  MODE: {old} -> {new}")
+    try:
+        with open("/proc/sys/vm/drop_caches", "w") as f:
+            f.write("3")
+        log("  caches dropped (page cache, dentries, inodes)")
+    except Exception as e:
+        log(f"  cannot drop caches: {e}")
+    freed, count = _prune_tmp()
+    if count:
+        log(f"  TMP: removed {count} leftover file(s), {freed / 1048576:.1f} MiB")
+    else:
+        log("  TMP: nothing stale to remove")
+
 
 # ─── Stable Diffusion ──────────────────────────────────────────────────────
 SD_CLI = os.environ.get("SD_CLI", "/opt/stable-diffusion.cpp/build/bin/sd-cli")
@@ -4398,6 +4446,7 @@ def generate_video(prompt, msg_obj=None, thread_channel=None, input_image=None):
 
 # ─── Main ───────────────────────────────────────────────────────────────────
 def main():
+    global _last_mode
     global _current_mode
     log("Starting Queue Runner v10 (Secure + Cron + Discord)")
     load_history()
@@ -4420,6 +4469,11 @@ def main():
     last_memory_check = 0
     while running:
         state['cycle'] += 1
+        # Mode switches are detected here rather than at each assignment, so a new
+        # path cannot forget the cleanup.
+        if _current_mode != _last_mode:
+            _on_mode_change(_last_mode, _current_mode)
+            _last_mode = _current_mode
         all_jobs = []
         if os.path.exists(JOBS_JSON):
             try:
