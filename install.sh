@@ -279,6 +279,21 @@ model_label() {
     printf '%s' "${p#"${MODELS_DIR}/"}"
 }
 
+
+# Human-readable size for the menus. A draft head and a 27B model differ by an
+# order of magnitude, and that is what tells them apart when the name does not.
+human_size() {
+    local bytes g mb
+    bytes=$(stat -c %s "$1" 2>/dev/null || echo 0)
+    if [[ "$bytes" -ge 1073741824 ]]; then
+        g=$((bytes / 1073741824))
+        mb=$(((bytes % 1073741824) / 107374182))
+        printf '%d.%d GiB' "$g" "$mb"
+    else
+        printf '%d MiB' $((bytes / 1048576))
+    fi
+}
+
 # Write KEY="value" into .env, but ONLY if the key is currently empty (never
 # overwrite a path the user typed manually during configure).
 sd_env_set() {
@@ -1087,6 +1102,7 @@ configure_models() {
         local _f _base
         while IFS= read -r -d '' _f; do
             _base=$(basename "$_f")
+            _size=$(stat -c %s "$_f" 2>/dev/null || echo 0)
             if [[ "$_base" == *mmproj* ]]; then
                 mmprojs+=("$_f")
             elif [[ "${_base,,}" == *dflash* ]]; then
@@ -1094,8 +1110,15 @@ configure_models() {
                 # Case-insensitive: real files are named *-DFlash-*.gguf.
                 dflashs+=("$_f")
             elif [[ "$_base" == mtp-* ]] || [[ "$_base" == *-mtp* ]] || [[ "$_base" == *draft* ]]; then
-                # Separate MTP draft files (mtp-*.gguf, *-mtp*.gguf, *draft*)
-                mtps+=("$_f")
+                # The name is not enough: a 27B model can end in -mtp. A draft head
+                # is small, so anything over 2 GiB is a model that happens to be
+                # named like one - and it is listed as such, with a note.
+                if [[ "$_size" -lt $((2 * 1024 * 1024 * 1024)) ]]; then
+                    mtps+=("$_f")
+                else
+                    models+=("$_f")
+                    log_info "  $(basename "$_f") ($((_size / 1048576)) MB) is named like a draft but too big for one - listed as a model"
+                fi
             else
                 models+=("$_f")
             fi
@@ -1123,7 +1146,7 @@ YAMLEOF
         if [[ ${#models[@]} -gt 0 ]]; then
             local _i=1
             for _m in "${models[@]}"; do
-                printf "    ${GREEN}[%s]${NC} %s\n" "$_i" "$(model_label "$_m")"
+                printf "    ${GREEN}[%s]${NC} %s\n" "$_i" "$(model_label "$_m")  ($(human_size "$_m"))"
                 _i=$((_i+1))
             done
             echo -e "    ${YELLOW}[c]${NC} enter a custom .gguf path"
@@ -1202,7 +1225,7 @@ YAMLEOF
             echo -e "  ${BLUE}── 🖼️  VISION — mmproj detected, attach for image/audio support ──${NC}"
             local _j=1
             for _mp in "${mmprojs[@]}"; do
-                printf "    ${GREEN}[%s]${NC} %s\n" "$_j" "$(model_label "$_mp")"
+                printf "    ${GREEN}[%s]${NC} %s\n" "$_j" "$(model_label "$_mp")  ($(human_size "$_mp"))"
                 _j=$((_j+1))
             done
             echo -e "    ${YELLOW}[0]${NC} no vision"
@@ -1234,14 +1257,14 @@ YAMLEOF
         if [[ ${#mtps[@]} -gt 0 ]]; then
             local _k=1
             for _mt in "${mtps[@]}"; do
-                printf "    ${GREEN}[%s]${NC} MTP draft: %s\n" "$_k" "$(model_label "$_mt")"
+                printf "    ${GREEN}[%s]${NC} MTP draft: %s\n" "$_k" "$(model_label "$_mt")  ($(human_size "$_mt"))"
                 _k=$((_k+1))
             done
         fi
         if [[ ${#dflashs[@]} -gt 0 ]]; then
             local _dk=1
             for _df in "${dflashs[@]}"; do
-                printf "    ${GREEN}[f%s]${NC} DFlash draft: %s\n" "$_dk" "$(model_label "$_df")"
+                printf "    ${GREEN}[f%s]${NC} DFlash draft: %s\n" "$_dk" "$(model_label "$_df")  ($(human_size "$_df"))"
                 _dk=$((_dk+1))
             done
         fi
