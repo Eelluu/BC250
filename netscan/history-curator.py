@@ -30,6 +30,15 @@ def save_topic(title):
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(f"- [{datetime.now().strftime('%Y-%m-%d')}] {title}\n")
 
+def write_digest(title, content, path):
+    """Short teaser next to the full script, for the Discord report."""
+    text = "# " + title + "\n\n" + content.strip()[:1200]
+    text += "\n\n---\nScript completo: " + path + "\n"
+    with open(os.path.join(DATA_DIR, "latest-digest.md"), "w", encoding="utf-8") as f:
+        f.write(text)
+    print("  Digest: " + DATA_DIR + "/latest-digest.md")
+
+
 def save_script(title, content):
     """Save the full video script to a file."""
     os.makedirs(SCRIPTS_DIR, exist_ok=True)
@@ -39,6 +48,7 @@ def save_script(title, content):
     path = os.path.join(SCRIPTS_DIR, filename)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
+    write_digest(title, content, path)
     return path
 
 def run_curator():

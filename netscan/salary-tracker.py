@@ -37,6 +37,27 @@ from llm_sanitize import sanitize_llm_output, call_llm
 # ── Config ─────────────────────────────────────────────────────────────────
 # LLM Proxy (llama-swap / OpenAI format) via llm_sanitize
 SALARY_DIR = Path("/opt/netscan/data/salary")
+
+
+def write_digest(snapshot):
+    """Short, readable summary for the Discord report; the JSON stays the record."""
+    stats = (snapshot.get("stats") or {}).get("b2b_net_pln_monthly") or {}
+    meta = snapshot.get("meta") or {}
+    analysis = (snapshot.get("analysis") or "").strip()
+    out = ["# Salarios B2B - " + datetime.now().strftime("%Y-%m-%d"), ""]
+    if stats:
+        med = int(stats.get("median_mid") or 0)
+        lo = int(stats.get("p25_mid") or 0)
+        hi = int(stats.get("p75_mid") or 0)
+        out += ["| Mediana | P25 | P75 |", "|---:|---:|---:|",
+                "| %s PLN | %s | %s |" % (format(med, ","), format(lo, ","), format(hi, ",")),
+                ""]
+    out.append("%s registros de %s fuentes" % (
+        meta.get("total_records", "?"), len(meta.get("sources") or [])))
+    if analysis:
+        out += ["", analysis[:900]]
+    (SALARY_DIR / "latest-digest.md").write_text("\n".join(out) + "\n", encoding="utf-8")
+    print("  Digest: " + str(SALARY_DIR / "latest-digest.md"))
 CAREER_DIR = Path("/opt/netscan/data/career")
 HISTORY_FILE = SALARY_DIR / "salary-history.json"
 PROFILE_FILE = Path("/opt/netscan/profile-private.json")
@@ -878,6 +899,7 @@ def run_analyze():
         old.unlink(missing_ok=True)
 
     log(f"Saved: {out_path}")
+    write_digest(snapshot)
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] salary-tracker analyze done ({duration}s)", flush=True)
 
 

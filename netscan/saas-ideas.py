@@ -31,6 +31,9 @@ def save_to_log(saas_list):
         for item in saas_list:
             f.write(f"- [{datetime.now().strftime('%Y-%m-%d')}] {item['name']}: {item['description']}\n")
 
+_DIGEST = []
+
+
 def save_plan(name, content):
     """Save the full business/tech plan to a file."""
     os.makedirs(PLANS_DIR, exist_ok=True)
@@ -39,6 +42,11 @@ def save_plan(name, content):
     path = os.path.join(PLANS_DIR, filename)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
+    _DIGEST.append("- **%s** -> %s" % (name, os.path.basename(path)))
+    with open(os.path.join(DATA_DIR, "latest-digest.md"), "w", encoding="utf-8") as f:
+        f.write("# SaaS ideas - %s\n\n%s\n" % (datetime.now().strftime("%Y-%m-%d"),
+                                                 "\n".join(_DIGEST)))
+    print("  Digest: " + DATA_DIR + "/latest-digest.md")
     return path
 
 def run_saas_visionary():

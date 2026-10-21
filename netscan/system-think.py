@@ -146,5 +146,28 @@ def main():
     if args.netsec or args.all: run_netsec()
     if args.health or args.all: run_health()
 
+def write_digest():
+    """Short summary of today's analyses, for the Discord report."""
+    out = ["# System analysis - " + TODAY, ""]
+    found = False
+    for area in ("gpu", "netsec", "health"):
+        text = ""
+        for candidate in sorted(THINK_DIR.glob("*" + area + "*" + TODAY + "*.json")):
+            try:
+                text = (load_json(candidate) or {}).get("analysis") or ""
+            except Exception:
+                text = ""
+            if text.strip():
+                break
+        if text.strip():
+            out += ["## " + area, "", text.strip()[:500], ""]
+            found = True
+    if not found:
+        out.append("No analyses produced today.")
+    (THINK_DIR / "latest-digest.md").write_text("\n".join(out) + "\n", encoding="utf-8")
+    print("  Digest: " + str(THINK_DIR / "latest-digest.md"))
+
+
 if __name__ == "__main__":
     main()
+    write_digest()
