@@ -284,6 +284,52 @@ sd_env_set() {
     log_info "  ${key} = ${value}"
 }
 
+# Read KEY from .env, quotes stripped. Prints nothing when it is absent or empty.
+env_get() {
+    local key="$1" line
+    [[ -f "${NETSCAN_DIR}/.env" ]] || return 0
+    line=$(grep -m1 -E "^${key}=" "${NETSCAN_DIR}/.env" 2>/dev/null || true)
+    [[ -n "$line" ]] || return 0
+    line=${line#*=}
+    line=${line#\"}
+    line=${line%\"}
+    printf '%s' "$line"
+}
+
+# Merge a freshly rendered .env template into the existing file instead of
+# replacing it. A key that already holds a non-empty value keeps it — the Discord
+# token above all, so re-running the installer to change a model does not mean
+# retyping it — and keys the template does not mention (JAMENDO_CLIENT_ID, HASS_*,
+# anything added by hand) are kept at the end rather than silently dropped.
+# Comments and ordering still come from the template, so the file reads the same.
+env_merge() {
+    local tmpl="$1" dst="$2" line key existing seen="" extra=""
+    : > "${dst}.merge"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]]; then
+            key="${BASH_REMATCH[1]}"
+            seen="${seen}${key} "
+            existing=$(grep -m1 -E "^${key}=" "$dst" 2>/dev/null || true)
+            if [[ -n "$existing" && "$existing" != "${key}=" && "$existing" != "${key}=\"\"" ]]; then
+                printf '%s\n' "$existing" >> "${dst}.merge"
+                continue
+            fi
+        fi
+        printf '%s\n' "$line" >> "${dst}.merge"
+    done < "$tmpl"
+    if [[ -f "$dst" ]]; then
+        while IFS= read -r line; do
+            key="${line%%=*}"
+            case " ${seen}" in *" ${key} "*) continue ;; esac
+            extra="${extra}${line}"$'\n'
+        done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$dst" 2>/dev/null || true)
+        if [[ -n "$extra" ]]; then
+            printf '\n# Kept from the previous .env (not in the template)\n%b' "$extra" >> "${dst}.merge"
+        fi
+    fi
+    mv "${dst}.merge" "$dst"
+}
+
 # Verify the distro Pillow is visible inside the venv and satisfies discord.py (>=8.0).
 # Uses the venv Python explicitly and handles version suffixes like "10.0.0.dev0".
 # Returns:
@@ -1365,23 +1411,40 @@ cmd_configure() {
     local hf_perf=""
     local do_write_env=1
 
+    # An existing .env is merged, never replaced. Same questions as a fresh
+    # install, but Enter keeps what is already there, so changing a model does not
+    # mean retyping the bot token, and a key added by hand is never dropped.
     if [[ -f "${NETSCAN_DIR}/.env" ]]; then
-        log_warn "Existing .env found."
-        if ! prompt_yn "Overwrite existing .env?" n; then
-            log_info "Keeping existing .env. Edit ${NETSCAN_DIR}/.env manually if needed."
-            do_write_env=0
-        fi
+        log_ok "Existing .env found: current values are kept, press Enter to accept them."
     fi
 
     if [[ $do_write_env -eq 1 ]]; then
-        read_secret "Discord Bot Token (hidden): " discord_token
-        while true; do
-            prompt_input "Your Discord User ID (numbers only): " discord_owner
-            if [[ "$discord_owner" =~ ^[0-9]+$ ]]; then
-                break
+        local cur_token cur_owner
+        cur_token=$(env_get DISCORD_TOKEN)
+        cur_owner=$(env_get DISCORD_OWNER_ID)
+        if [[ -n "$cur_token" ]]; then
+            read_secret "Discord Bot Token (hidden) [Enter = keep current]: " discord_token
+            discord_token="${discord_token:-$cur_token}"
+        else
+            read_secret "Discord Bot Token (hidden): " discord_token
+        fi
+        if [[ -n "$cur_owner" ]]; then
+            prompt_input "Your Discord User ID [Enter = keep ${cur_owner}]: " discord_owner
+            if [[ -z "$discord_owner" ]]; then
+                discord_owner="$cur_owner"
+            elif [[ ! "$discord_owner" =~ ^[0-9]+$ ]]; then
+                log_warn "Not numeric — keeping ${cur_owner}."
+                discord_owner="$cur_owner"
             fi
-            log_warn "Invalid ID. Must be numeric only."
-        done
+        else
+            while true; do
+                prompt_input "Your Discord User ID (numbers only): " discord_owner
+                if [[ "$discord_owner" =~ ^[0-9]+$ ]]; then
+                    break
+                fi
+                log_warn "Invalid ID. Must be numeric only."
+            done
+        fi
         log_info "Discord owner ID: ${discord_owner}"
         log_info "Model roles (primary/fallback/smart) are assigned later, in the model selection menu."
 
@@ -1434,7 +1497,9 @@ cmd_configure() {
             fi
         fi
 
-        cat > "${NETSCAN_DIR}/.env" <<EOF
+        local env_tmpl
+        env_tmpl=$(mktemp)
+        cat > "$env_tmpl" <<EOF
 # Discord Bot
 DISCORD_TOKEN="${discord_token}"
 DISCORD_OWNER_ID="${discord_owner}"
@@ -1517,14 +1582,19 @@ HF_HUB_DOWNLOAD_TIMEOUT="60"
 # Auto-sleep curfew: force sleep mode after this hour if in smart mode (default 1 = 1:00 AM)
 SMART_MODE_CURFEW_HOUR="1"
 EOF
+        if [[ -f "${NETSCAN_DIR}/.env" ]]; then
+            cp -a "${NETSCAN_DIR}/.env" "${NETSCAN_DIR}/.env.bak-$(date +%Y%m%d-%H%M%S)"
+        fi
+        env_merge "$env_tmpl" "${NETSCAN_DIR}/.env"
+        rm -f "$env_tmpl"
         chmod 600 "${NETSCAN_DIR}/.env"
-        log_ok ".env written to ${NETSCAN_DIR}/.env (permissions 600)"
+        log_ok ".env merged into ${NETSCAN_DIR}/.env (existing values kept, permissions 600)"
         log_info ""
         log_info "--- .env summary (token masked) ---"
-        log_info "  DISCORD_OWNER_ID        = ${discord_owner}"
+        log_info "  DISCORD_OWNER_ID        = $(env_get DISCORD_OWNER_ID)"
         log_info "  LLM roles               = assigned in model selection menu (mmproj per model)"
-        log_info "  SD_MODELS_DIR           = ${sd_base:-/opt/stable-diffusion.cpp/models}"
-        log_info "  HF_XET_HIGH_PERFORMANCE = ${hf_perf:-<empty>}"
+        log_info "  SD_MODELS_DIR           = $(env_get SD_MODELS_DIR)"
+        log_info "  HF_XET_HIGH_PERFORMANCE = $(env_get HF_XET_HIGH_PERFORMANCE)"
     fi
 
     # ── 3. Profile.json ──

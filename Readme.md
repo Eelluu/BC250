@@ -88,6 +88,13 @@ Clawd ahora te habla por Discord. Para activarlo:
 2. Obtén tu **Token** y tu **User ID**.
 3. Edita tu archivo `/opt/netscan/.env` con esta información.
 
+> **Re-ejecutar `install.sh` ya no borra nada.** Si existe `/opt/netscan/.env`, los valores
+> actuales se conservan y solo se te pregunta por lo que falte: en el token del bot y en el
+> User ID, `Enter` mantiene lo que ya hay. Las claves que la plantilla no conoce
+> (`JAMENDO_CLIENT_ID`, `HASS_TOKEN`, las que añadas a mano) se conservan al final del
+> fichero bajo `# Kept from the previous .env`, y el anterior queda copiado como
+> `.env.bak-<fecha>`. Para cambiar solo un modelo no hace falta volver a teclear el token.
+
 ### ⚙️ PASO 4: Gestión de Modelos (Llama-Swap)
 El sistema es dinámico. No tienes que programar nada para cambiar de IA:
 1. En tu archivo `.env`, cambia la línea `LLM_MODEL="nombre-de-tu-modelo"`.
