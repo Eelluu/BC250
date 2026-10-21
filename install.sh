@@ -1101,6 +1101,9 @@ configure_models() {
 
     # Build config.yaml
     cat > /opt/llama-swap/config.yaml <<'YAMLEOF'
+# Keep --port ${PORT} in every cmd. llama-server 0.7 (Oct 2026) changed its
+# default from 8080 to 9931, while llama-swap proxies to ${PORT} (5800+): a cmd
+# without --port starts a server that nothing can reach.
 models:
 YAMLEOF
 
