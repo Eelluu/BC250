@@ -731,7 +731,7 @@ Analyze:
 3. How this compares to FAANG vs silicon vs automotive tiers
 4. Actionable insights for someone at T4 level (15yr exp) considering T5 promotion or external move"""
 
-    return call_ollama(system, prompt, temperature=0.3, max_tokens=2000)
+    return call_llm(system, prompt, temperature=0.3, max_tokens=2000)
 
 
 # ── History Management ─────────────────────────────────────────────────────
