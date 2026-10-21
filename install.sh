@@ -273,7 +273,7 @@ find_model_file() {
 }
 
 # Path relative to MODELS_DIR, so two files with the same name in different
-# subfolders are telling apart in the menus (the config still gets the full path).
+# subfolders can be told apart in the menus (the config still gets the full path).
 model_label() {
     local p="$1"
     printf '%s' "${p#"${MODELS_DIR}/"}"
