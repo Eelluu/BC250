@@ -272,6 +272,13 @@ find_model_file() {
     find "$dir" -type f -iname "$pattern" 2>/dev/null | head -n 1
 }
 
+# Path relative to MODELS_DIR, so two files with the same name in different
+# subfolders are telling apart in the menus (the config still gets the full path).
+model_label() {
+    local p="$1"
+    printf '%s' "${p#"${MODELS_DIR}/"}"
+}
+
 # Write KEY="value" into .env, but ONLY if the key is currently empty (never
 # overwrite a path the user typed manually during configure).
 sd_env_set() {
@@ -1116,7 +1123,7 @@ YAMLEOF
         if [[ ${#models[@]} -gt 0 ]]; then
             local _i=1
             for _m in "${models[@]}"; do
-                printf "    ${GREEN}[%s]${NC} %s\n" "$_i" "$(basename "$_m")"
+                printf "    ${GREEN}[%s]${NC} %s\n" "$_i" "$(model_label "$_m")"
                 _i=$((_i+1))
             done
             echo -e "    ${YELLOW}[c]${NC} enter a custom .gguf path"
@@ -1195,7 +1202,7 @@ YAMLEOF
             echo -e "  ${BLUE}── 🖼️  VISION — mmproj detected, attach for image/audio support ──${NC}"
             local _j=1
             for _mp in "${mmprojs[@]}"; do
-                printf "    ${GREEN}[%s]${NC} %s\n" "$_j" "$(basename "$_mp")"
+                printf "    ${GREEN}[%s]${NC} %s\n" "$_j" "$(model_label "$_mp")"
                 _j=$((_j+1))
             done
             echo -e "    ${YELLOW}[0]${NC} no vision"
@@ -1227,14 +1234,14 @@ YAMLEOF
         if [[ ${#mtps[@]} -gt 0 ]]; then
             local _k=1
             for _mt in "${mtps[@]}"; do
-                printf "    ${GREEN}[%s]${NC} MTP draft: %s\n" "$_k" "$(basename "$_mt")"
+                printf "    ${GREEN}[%s]${NC} MTP draft: %s\n" "$_k" "$(model_label "$_mt")"
                 _k=$((_k+1))
             done
         fi
         if [[ ${#dflashs[@]} -gt 0 ]]; then
             local _dk=1
             for _df in "${dflashs[@]}"; do
-                printf "    ${GREEN}[f%s]${NC} DFlash draft: %s\n" "$_dk" "$(basename "$_df")"
+                printf "    ${GREEN}[f%s]${NC} DFlash draft: %s\n" "$_dk" "$(model_label "$_df")"
                 _dk=$((_dk+1))
             done
         fi
