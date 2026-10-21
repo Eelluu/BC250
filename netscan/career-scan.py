@@ -22,7 +22,6 @@ Filters:
 Usage:
     career-scan.py                  (full scan — all sources)
     career-scan.py --quick          (career pages only, skip intel)
-    career-scan.py --signal-test    (send test notification)
 
 Schedule (cron): Mon/Thu at 11:00
     0 11 * * 1,4  /usr/bin/python3 /opt/netscan/career-scan.py
@@ -64,10 +63,6 @@ def get_cv_context():
 LLM_URL = "http://localhost:8080/v1"
 LLM_MODEL = "gemma4-26b-q3"
 
-# Signal notifications
-SIGNAL_RPC = os.environ.get("SIGNAL_RPC", "")
-SIGNAL_FROM = os.environ.get("SIGNAL_FROM", "")
-SIGNAL_TO = os.environ.get("SIGNAL_TO", "")
 
 # LLM model name for metadata
 OLLAMA_MODEL = os.environ.get("LLM_MODEL", LLM_MODEL)
@@ -698,24 +693,6 @@ def _merge_workday_urls(llm_jobs, workday_jobs):
             job["job_url"] = best_url
 
 
-def signal_send(msg):
-    """Send Signal notification."""
-    try:
-        payload = json.dumps({
-            "jsonrpc": "2.0", "method": "send",
-            "params": {"account": SIGNAL_FROM, "recipient": [SIGNAL_TO], "message": msg},
-            "id": "career-scan",
-        })
-        req = urllib.request.Request(
-            SIGNAL_RPC, data=payload.encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        urllib.request.urlopen(req, timeout=15)
-        return True
-    except Exception:
-        return False
-
-
 def content_hash(text):
     """Hash content for change detection."""
     return hashlib.sha256(text[:5000].encode()).hexdigest()[:16]
@@ -1274,80 +1251,13 @@ def write_report_digest(scan_data):
     print(f"  Discord digest saved to: {digest_path}")
 
 
-# ─── Signal alerts for hot matches ───
-
-def send_hot_alerts(jobs, intel_data):
-    """Send Signal notifications for very hot matches and urgent intel.
-    Per refactor policy: only score>=85 during scrape phase (immediate), or LLM-flagged during analyze.
-    Tracks sent items in daily file to avoid duplicate notifications."""
-    hot_jobs = [j for j in jobs if j.get("match_score", 0) >= 85 and j.get("remote_compatible", False)]
-    urgent_intel = []
-    if intel_data and "alerts" in intel_data:
-        urgent_intel = [a for a in intel_data["alerts"] if a.get("severity") == "urgent"]
-
-    # Load already-sent keys for today
-    today_str = datetime.now().strftime("%Y%m%d")
-    sent_path = os.path.join(CAREER_DIR, f"sent-{today_str}.json")
-    already_sent = set()
-    try:
-        with open(sent_path) as f:
-            already_sent = set(json.load(f))
-    except (FileNotFoundError, json.JSONDecodeError):
-        pass
-
-    alerts_sent = 0
-    newly_sent = []
-
-    for j in hot_jobs[:3]:  # Max 3 job alerts per scan
-        key = f"job:{j.get('company','?')}:{j.get('title','?')}"
-        if key in already_sent:
-            continue
-        msg = (
-            f"🎯 HOT JOB MATCH ({j.get('match_score', 0)}%)\n"
-            f"{j.get('title', '?')} @ {j.get('company', '?')}\n"
-            f"📍 {j.get('location', '?')}\n"
-            f"✅ {', '.join(j.get('match_reasons', [])[:3])}\n"
-            f"💰 {j.get('salary_hint', 'not disclosed')}\n"
-            f"🔗 Check dashboard → career.html"
-        )
-        if signal_send(msg):
-            alerts_sent += 1
-            newly_sent.append(key)
-            print(f"  📡 Signal alert sent: {j.get('title', '?')}")
-
-    for a in urgent_intel[:2]:  # Max 2 intel alerts
-        key = f"intel:{a.get('company','?')}:{a.get('summary','?')}"
-        if key in already_sent:
-            continue
-        msg = (
-            f"⚠️ CAREER ALERT: {a.get('type', 'unknown').upper()}\n"
-            f"{a.get('company', '?')}: {a.get('summary', '?')}\n"
-            f"{a.get('details', '')[:200]}"
-        )
-        if signal_send(msg):
-            alerts_sent += 1
-            newly_sent.append(key)
-            print(f"  📡 Signal alert sent: {a.get('summary', '?')}")
-
-    # Persist sent keys
-    if newly_sent:
-        already_sent.update(newly_sent)
-        with open(sent_path, "w") as f:
-            json.dump(sorted(already_sent), f)
-
-    if not alerts_sent and (hot_jobs or urgent_intel):
-        print(f"  All {len(hot_jobs)} hot jobs / {len(urgent_intel)} intel already sent today")
-
-    return alerts_sent
-
-
 # ─── Raw data file for scrape/analyze split ───
 RAW_CAREERS_FILE = os.path.join(CAREER_DIR, "raw-careers.json")
 
 
 # ─── Scrape phase ───
 
-def run_scrape(quick=False, signal_ok=True):
+def run_scrape(quick=False):
     """Phases 1-3: Scrape career pages, job boards, intel sources. Save raw JSON."""
     dt = datetime.now()
     os.makedirs(CAREER_DIR, exist_ok=True)
@@ -1390,13 +1300,6 @@ def run_scrape(quick=False, signal_ok=True):
     print(f"  Hot matches (>=70): {scan_meta['hot_matches']}")
     print(f"  Remote-compatible: {scan_meta['remote_compatible']}")
     print(f"  Duration: {scrape_duration:.0f}s")
-
-    # Send Signal alerts for very hot matches (score>=85) during scrape
-    # Only send if running full mode (not --scrape-only, to avoid noise)
-    if signal_ok:
-        alerts = send_hot_alerts(all_jobs, intel_data)
-        if alerts:
-            print(f"  Sent {alerts} Signal alert(s) for hot matches")
 
     # Save raw intermediate data
     raw_data = {
@@ -1526,14 +1429,8 @@ def main():
                         help='Only run LLM analysis on previously scraped raw data')
     parser.add_argument('--quick', action='store_true',
                         help='Quick mode: skip company intel sources')
-    parser.add_argument('--signal-test', action='store_true',
-                        help='Test Signal notification and exit')
     args = parser.parse_args()
 
-    if args.signal_test:
-        ok = signal_send("🧪 Career scanner test — Signal notifications working!")
-        print("Signal test:", "OK" if ok else "FAILED")
-        return
 
     # GPU guard — only needed for analyze phase (not scrape-only)
     if not args.scrape_only:
@@ -1552,7 +1449,7 @@ def main():
         print("  Starting analysis phase...")
 
     if args.scrape_only:
-        run_scrape(quick=args.quick, signal_ok=False)
+        run_scrape(quick=args.quick)
     elif args.analyze_only:
         run_analyze()
     else:

@@ -44,9 +44,6 @@ OLLAMA_CHAT = f"{OLLAMA_URL}/api/chat"
 OLLAMA_MODEL = "gemma4-26b-q3"
 OLLAMA_TIMEOUT = 900
 
-SIGNAL_RPC = "http://127.0.0.1:8080/api/v1/rpc"
-SIGNAL_FROM = "+<BOT_PHONE>"
-SIGNAL_TO = "+<OWNER_PHONE>"
 
 USER_AGENT = "NetscanCSIWatch/1.0 (Linux SBC camera sensor monitor)"
 
@@ -137,27 +134,6 @@ def call_ollama(system_prompt, user_content, timeout=OLLAMA_TIMEOUT):
 def _strip_thinking(text):
     """Strip CoT thinking tags and Chinese text from LLM output."""
     return sanitize_llm_output(text)
-
-
-def signal_send(msg):
-    """Send Signal notification."""
-    payload = json.dumps({
-        "jsonrpc": "2.0", "id": 1, "method": "send",
-        "params": {
-            "account": SIGNAL_FROM,
-            "recipient": [SIGNAL_TO],
-            "message": msg,
-        }
-    }).encode()
-    req = urllib.request.Request(
-        SIGNAL_RPC, data=payload,
-        headers={"Content-Type": "application/json"}
-    )
-    try:
-        urllib.request.urlopen(req, timeout=10)
-        log("Signal alert sent")
-    except Exception as ex:
-        log(f"Signal send failed: {ex}")
 
 
 class HTMLTextExtractor(HTMLParser):
@@ -780,7 +756,6 @@ def run_analyze():
         if len(new_findings) > 5:
             alert_lines.append(f"  ... +{len(new_findings) - 5} more")
         alert_lines.append(f"\nhttp://127.0.0.1:8888/issues.html")
-        signal_send("\n".join(alert_lines))
 
     # Regenerate dashboard
     gen_html = os.path.join(SCRIPT_DIR, "generate-html.py")

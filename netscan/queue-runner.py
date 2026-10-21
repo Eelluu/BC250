@@ -60,8 +60,6 @@ DISCORD_OWNER_ID = int(os.environ.get('DISCORD_OWNER_ID') or 0)
 # .strip() + 'or' so an EMPTY LLM_MODEL in .env falls back to the default instead of
 # sending a blank model name to llama-swap (which 404s).
 SIGNAL_CHAT_MODEL = os.environ.get("LLM_MODEL", "").strip() or "gemma4-12b-q3"
-SIGNAL_FALLBACK_MODEL = os.environ.get("LLM_FALLBACK_MODEL", "qwen3.5-35b-a3b-iq2m")
-SIGNAL_SMART_MODEL = os.environ.get("LLM_SMART_MODEL", "qwen3.5-35b-a3b-iq2m")  # Model for smart mode
 SIGNAL_CHAT_MAX_EXEC = 15
 SIGNAL_EXEC_TIMEOUT_S = 30
 SIGNAL_LLM_TIMEOUT_S = 900

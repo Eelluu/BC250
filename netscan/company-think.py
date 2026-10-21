@@ -28,9 +28,6 @@ THINK_DIR    = Path("/opt/netscan/data/intel/think")
 INTEL_DIR    = Path("/opt/netscan/data/intel")
 PROFILE_FILE = Path("/opt/netscan/profile.json")
 
-SIGNAL_RPC   = "http://127.0.0.1:8080/api/v1/rpc"
-SIGNAL_FROM  = "+<BOT_PHONE>"
-SIGNAL_TO    = "+<OWNER_PHONE>"
 
 UA = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
 
@@ -502,21 +499,6 @@ COMPANIES = {
 
 def log(msg):
     print(f"  {msg}", flush=True)
-
-
-def signal_send(msg):
-    try:
-        payload = json.dumps({
-            "jsonrpc": "2.0", "method": "send",
-            "params": {"account": SIGNAL_FROM, "recipient": [SIGNAL_TO], "message": msg},
-            "id": "company-think",
-        }).encode()
-        req = urllib.request.Request(SIGNAL_RPC, data=payload,
-            headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=15)
-        log(f"Signal alert sent ({len(msg)} chars)")
-    except Exception as e:
-        log(f"Signal send failed: {e}")
 
 
 def call_ollama(system_prompt, user_prompt, temperature=0.5, max_tokens=4000, think=True):

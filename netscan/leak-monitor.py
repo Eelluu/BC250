@@ -327,28 +327,6 @@ def hash_indicator(text):
 
 # ── Signal Notification ───────────────────────────────────────────────────
 
-def signal_send(msg):
-    """Send Signal notification."""
-    try:
-        payload = json.dumps({
-            "jsonrpc": "2.0", "method": "send",
-            "params": {
-                "account": SIGNAL_FROM,
-                "recipient": [SIGNAL_TO],
-                "message": msg,
-            },
-            "id": "leak-monitor",
-        })
-        req = urllib.request.Request(
-            SIGNAL_RPC, data=payload.encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        urllib.request.urlopen(req, timeout=15)
-        return True
-    except Exception as e:
-        log(f"  Signal send failed: {e}")
-        return False
-
 
 # ── LLM Analysis ──────────────────────────────────────────────────────────
 
@@ -1713,7 +1691,6 @@ def run_analyze_only():
                 alert_lines.append(f"[{f['severity'].upper()}] {f['title'][:100]}")
             if analysis:
                 alert_lines.append(f"\n📊 Analysis:\n{analysis[:500]}")
-            signal_send("\n".join(alert_lines))
 
     # Summary
     log(f"\n{'='*60}")
@@ -1795,7 +1772,6 @@ def run_full_scan():
                 alert_lines.append(f"[{f['severity'].upper()}] {f['title'][:100]}")
             if analysis:
                 alert_lines.append(f"\n📊 Analysis:\n{analysis[:500]}")
-            signal_send("\n".join(alert_lines))
 
     # ── Summary ──
     log(f"\n{'='*60}")

@@ -28,9 +28,6 @@ DATA_DIR = Path("/opt/netscan/data/news")
 THINK_DIR = Path("/opt/netscan/data/think")
 PROFILE_PATH = Path("/opt/netscan/profile.json")
 
-SIGNAL_RPC = "http://127.0.0.1:8080/api/v1/rpc"
-SIGNAL_FROM = os.environ.get("SIGNAL_ACCOUNT", "+<BOT_PHONE>")
-SIGNAL_TO = os.environ.get("SIGNAL_OWNER", "+<OWNER_PHONE>")
 
 TODAY = datetime.now().strftime("%Y%m%d")
 UA = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
@@ -292,27 +289,6 @@ def call_ollama(system_prompt, user_prompt, temperature=0.3, max_tokens=2500):
     except Exception as e:
         log(f"  Ollama call failed: {e}")
         return None
-
-
-def signal_send(msg):
-    """Send Signal message."""
-    payload = json.dumps({
-        "jsonrpc": "2.0", "method": "send", "id": 1,
-        "params": {
-            "account": SIGNAL_FROM,
-            "recipient": [SIGNAL_TO],
-            "message": msg,
-        }
-    }).encode()
-    req = urllib.request.Request(SIGNAL_RPC, data=payload, headers={
-        "Content-Type": "application/json",
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            resp.read()
-            log("  Signal alert sent")
-    except Exception as e:
-        log(f"  Signal send failed: {e}")
 
 
 def llm_notification_filter(articles):
@@ -799,8 +775,7 @@ def run_analyze():
                 msg_parts.append(f"• [{a['source_name']}] {a['title']}")
                 if reason:
                     msg_parts.append(f"  → {reason}")
-            msg = "\n".join(msg_parts)
-            signal_send(msg[:1500])
+            print("\n".join(msg_parts))
         else:
             log(f"  LLM filtered out all {len(new_articles)} candidates — no notification")
 

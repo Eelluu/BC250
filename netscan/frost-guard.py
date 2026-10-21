@@ -35,9 +35,6 @@ from pathlib import Path
 LAT = REDACTED_LAT
 LON = REDACTED_LON
 
-SIGNAL_RPC = "http://127.0.0.1:8080/api/v1/rpc"
-SIGNAL_FROM = os.environ.get("SIGNAL_ACCOUNT", "+<BOT_PHONE>")
-SIGNAL_TO = os.environ.get("SIGNAL_OWNER", "+<OWNER_PHONE>")
 
 DATA_DIR = Path("/opt/netscan/data/weather")
 STATE_FILE = DATA_DIR / "frost-guard-state.json"
@@ -63,27 +60,6 @@ FORECAST_URL = (
 
 def log(msg):
     print(f"[frost-guard] {msg}", flush=True)
-
-
-def signal_send(msg):
-    """Send Signal message via JSON-RPC."""
-    payload = json.dumps({
-        "jsonrpc": "2.0", "method": "send", "id": 1,
-        "params": {
-            "account": SIGNAL_FROM,
-            "recipient": [SIGNAL_TO],
-            "message": msg,
-        }
-    }).encode()
-    req = urllib.request.Request(SIGNAL_RPC, data=payload, headers={
-        "Content-Type": "application/json",
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            resp.read()
-            log("  Signal alert sent")
-    except Exception as e:
-        log(f"  Signal send failed: {e}")
 
 
 def load_state():
@@ -190,7 +166,6 @@ def run():
                 f"Coldest hours:\n{detail}"
             )
             log(f"Transition: {old_frost} → frost")
-            signal_send(msg)
         else:
             msg = (
                 f"✅ FROST CLEAR — Łódź\n\n"
@@ -199,7 +174,6 @@ def run():
                 f"→ Re-enable garden water"
             )
             log(f"Transition: {old_frost} → safe")
-            signal_send(msg)
         state["frost_protection"] = new_frost
         changed = True
     else:
@@ -219,7 +193,6 @@ def run():
                 f"Coldest hours:\n{detail}"
             )
             log(f"Transition: blinds {old_blinds} → closed")
-            signal_send(msg)
         else:
             msg = (
                 f"☀️ DEEP FROST OVER — Łódź\n\n"
@@ -227,7 +200,8 @@ def run():
                 f"→ Disable automated external blinds/rollers"
             )
             log(f"Transition: blinds {old_blinds} → open")
-            signal_send(msg)
+        print(msg)
+        print(msg)
         state["blinds"] = new_blinds
         changed = True
     elif new_blinds is None:

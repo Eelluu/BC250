@@ -57,9 +57,6 @@ OLLAMA_CHAT = f"{OLLAMA_URL}/api/chat"
 OLLAMA_MODEL = "gemma4-26b-q3"
 
 # ── Signal notifications ──
-SIGNAL_RPC = "http://127.0.0.1:8080/api/v1/rpc"
-SIGNAL_FROM = "+<BOT_PHONE>"
-SIGNAL_TO = "+<OWNER_PHONE>"
 
 # Forum sections to scrape (fid -> metadata)
 FORUM_SECTIONS = {
@@ -206,28 +203,6 @@ def _strip_thinking(text):
 
 
 # ─── Signal Notification ───
-
-def signal_send(msg):
-    """Send Signal notification."""
-    try:
-        payload = json.dumps({
-            "jsonrpc": "2.0", "method": "send",
-            "params": {
-                "account": SIGNAL_FROM,
-                "recipient": [SIGNAL_TO],
-                "message": msg,
-            },
-            "id": "radio-scan",
-        })
-        req = urllib.request.Request(
-            SIGNAL_RPC, data=payload.encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        urllib.request.urlopen(req, timeout=15)
-        return True
-    except Exception as e:
-        log(f"  Signal send failed: {e}")
-        return False
 
 
 # ─── LLM Radio Analysis ───
@@ -843,7 +818,6 @@ def run_analyze():
                 alert_lines.append(f"[{h['score']}] {h.get('section_emoji', '📻')} {h['title'][:80]}")
             brief_lines = briefing.strip().split("\n")[:8]
             alert_lines.append(f"\n🤖 AI Briefing:\n" + "\n".join(brief_lines))
-            signal_send("\n".join(alert_lines)[:1500])
             already_sent.update(h.get("title", "") for h in new_hot)
             with open(sent_path, "w") as _f:
                 json.dump(sorted(already_sent), _f)

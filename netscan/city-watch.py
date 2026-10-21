@@ -42,9 +42,6 @@ OLLAMA_CHAT = f"{OLLAMA_URL}/api/chat"
 OLLAMA_MODEL = "gemma4-26b-q3"
 OLLAMA_TIMEOUT = 900
 
-SIGNAL_RPC = "http://127.0.0.1:8080/api/v1/rpc"
-SIGNAL_FROM = "+<BOT_PHONE>"
-SIGNAL_TO = "+<OWNER_PHONE>"
 
 DATA_DIR = Path("/opt/netscan/data/city")
 THINK_DIR = Path("/opt/netscan/data/think")
@@ -318,25 +315,6 @@ def _strip_thinking(text):
     """Strip CoT thinking tags and Chinese text from LLM output."""
     return sanitize_llm_output(text)
 
-def signal_send(msg):
-    """Send Signal notification."""
-    payload = json.dumps({
-        "jsonrpc": "2.0", "id": 1, "method": "send",
-        "params": {
-            "account": SIGNAL_FROM,
-            "recipient": [SIGNAL_TO],
-            "message": msg,
-        }
-    })
-    req = urllib.request.Request(
-        SIGNAL_RPC, data=payload.encode(),
-        headers={"Content-Type": "application/json"}
-    )
-    try:
-        urllib.request.urlopen(req, timeout=10)
-        log("Signal alert sent")
-    except Exception as ex:
-        log(f"Signal send failed: {ex}")
 
 # ── Main crawl ────────────────────────────────────────────────────────────
 
@@ -743,7 +721,6 @@ def run_analyze():
         else:
             # Use first ~800 chars of the full analysis
             alert_parts.append(f"\n{summary_text[:800]}")
-        signal_send("\n".join(alert_parts)[:1200])
         sent_flag.write_text(dt.isoformat())
     elif analysis:
         log(f"City watch alert already sent today — suppressed")

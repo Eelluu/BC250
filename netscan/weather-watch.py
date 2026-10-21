@@ -34,9 +34,6 @@ if not HASS_TOKEN:
             if line.startswith("HASS_TOKEN="):
                 HASS_TOKEN = line.split("=", 1)[1].strip().strip('"')
 
-SIGNAL_RPC = "http://127.0.0.1:8080/api/v1/rpc"
-SIGNAL_FROM = os.environ.get("SIGNAL_ACCOUNT", "+<BOT_PHONE>")
-SIGNAL_TO = os.environ.get("SIGNAL_OWNER", "+<OWNER_PHONE>")
 
 DATA_DIR = Path("/opt/netscan/data/weather")
 THINK_DIR = Path("/opt/netscan/data/think")
@@ -237,27 +234,6 @@ def call_ollama(system_prompt, user_prompt, temperature=0.3, max_tokens=2500):
     except Exception as e:
         log(f"  Ollama call failed: {e}")
         return None
-
-
-def signal_send(msg):
-    """Send Signal message."""
-    payload = json.dumps({
-        "jsonrpc": "2.0", "method": "send", "id": 1,
-        "params": {
-            "account": SIGNAL_FROM,
-            "recipient": [SIGNAL_TO],
-            "message": msg,
-        }
-    }).encode()
-    req = urllib.request.Request(SIGNAL_RPC, data=payload, headers={
-        "Content-Type": "application/json",
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            resp.read()
-            log("  Signal alert sent")
-    except Exception as e:
-        log(f"  Signal send failed: {e}")
 
 
 def wind_direction_label(deg):
@@ -875,7 +851,6 @@ def run_analyze():
                     if line.strip().startswith("- ") or line.strip().startswith("• "):
                         msg += f"\n\nTip: {line.strip()[2:]}"
                         break
-            signal_send(msg[:1500])
             cooldown_data[alert_key] = now_ts
             # Prune old entries (> 24h)
             cooldown_data = {k: v for k, v in cooldown_data.items() if now_ts - v < 86400}

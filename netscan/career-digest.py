@@ -36,9 +36,6 @@ THINK_DIR = DATA_DIR / "careers/think"
 SALARY_DIR = DATA_DIR / "salary"
 OUTPUT_DIR = CAREER_DIR
 
-SIGNAL_RPC = "http://127.0.0.1:8080/api/v1/rpc"
-SIGNAL_ACCOUNT = os.environ.get('SIGNAL_ACCOUNT', '+<BOT_PHONE>')
-SIGNAL_OWNER = os.environ.get('SIGNAL_OWNER', '+<OWNER_PHONE>')
 SIGNAL_MAX_LEN = 1800
 
 LOOKBACK_DAYS = 7
@@ -198,28 +195,6 @@ def build_digest(scan_data, days):
     return msg
 
 
-def send_signal(text):
-    """Send message via Signal JSON-RPC."""
-    payload = json.dumps({
-        "jsonrpc": "2.0", "id": f"digest-{int(datetime.now().timestamp())}",
-        "method": "send",
-        "params": {
-            "account": SIGNAL_ACCOUNT,
-            "recipient": [SIGNAL_OWNER],
-            "message": text
-        }
-    }).encode()
-    try:
-        req = urllib.request.Request(
-            SIGNAL_RPC, data=payload,
-            headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return True
-    except Exception as e:
-        log(f"Signal send error: {e}")
-        return False
-
-
 def main():
     dry_run = "--dry-run" in sys.argv
     days = LOOKBACK_DAYS
@@ -270,10 +245,6 @@ def main():
         log("Dry run — not sending via Signal")
     else:
         log("Sending via Signal...")
-        if send_signal(digest_msg):
-            log("Sent successfully")
-        else:
-            log("WARNING: Failed to send")
 
     log("Done")
 

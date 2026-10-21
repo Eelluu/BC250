@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """watchdog.py — Network integrity monitor & Signal alerter for bc250.
 
-10 automated checks, tiered Signal alerts, JSON reports for dashboard.
+10 automated checks, tiered alerts, JSON reports for dashboard.
 Integrates with existing netscan pipeline (scan/enum/vuln data).
 
 Checks (LIVE — safe to run frequently):
@@ -26,7 +26,7 @@ Alert tiers:
 Usage:
   watchdog.py              # full run (data deltas + live checks)
   watchdog.py --live-only  # ARP/DNS/ping only (for frequent cron)
-  watchdog.py --dry-run    # print alerts, don't send Signal
+  watchdog.py --dry-run    # print alerts, write/send nothing
 
 Cron:
   0 5 * * *    /opt/netscan/watchdog.py                           # daily full
@@ -48,11 +48,9 @@ REPORT_DIR  = f"{DATA_DIR}/watchdog"
 STATE_FILE  = f"{DATA_DIR}/watchdog-state.json"
 
 # Signal JSON-RPC
-SIGNAL_RPC  = "http://127.0.0.1:8080/api/v1/rpc"
 BOT_NUMBER  = "+<BOT_PHONE>"
 RECIPIENT   = "+<OWNER_PHONE>"
 
-DASHBOARD   = "http://127.0.0.1:8888/"
 SUBNET      = "192.168."          # prefix filter for the local network
 def _default_gateway():
     """Default gateway, read from the routing table.
@@ -142,33 +140,6 @@ def run_cmd(cmd, timeout=30):
     except Exception:
         return ""
 
-def send_signal(msg):
-    """Send message via signal-cli JSON-RPC daemon."""
-    try:
-        payload = json.dumps({
-            "jsonrpc": "2.0",
-            "method": "send",
-            "params": {
-                "account": BOT_NUMBER,
-                "recipient": [RECIPIENT],
-                "message": msg
-            },
-            "id": f"watchdog-{int(NOW.timestamp())}"
-        })
-        req = urllib.request.Request(
-            SIGNAL_RPC,
-            data=payload.encode(),
-            headers={"Content-Type": "application/json"}
-        )
-        resp = urllib.request.urlopen(req, timeout=15)
-        body = json.loads(resp.read())
-        if "error" in body:
-            log(f"  Signal RPC error: {body['error']}")
-            return False
-        return True
-    except Exception as ex:
-        log(f"  Signal send FAILED: {ex}")
-        return False
 
 def alert_hash(alert):
     """Stable hash for cooldown deduplication."""
@@ -709,7 +680,7 @@ def check_score_trend():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Alert Management & Signal Formatting
+# Alert Management & Formatting
 # ═══════════════════════════════════════════════════════════════════
 
 def load_state():
@@ -724,7 +695,7 @@ def filter_cooldown(alerts, state):
     sent = state.get("sent_alerts", {})
     return [a for a in alerts if sent.get(alert_hash(a), "") < cutoff]
 
-def build_signal_message(alerts, check_stats, mode):
+def build_alert_message(alerts, check_stats, mode):
     """Format actionable alerts into a readable Signal message."""
     if not alerts:
         return None
@@ -771,7 +742,6 @@ def build_signal_message(alerts, check_stats, mode):
             f"(+{vs.get('new_total', 0)}/−{vs.get('resolved', 0)})"
         )
 
-    parts.append(f"\n🔗 {DASHBOARD}")
 
     msg = "\n".join(parts)
     if len(msg) > 1500:
@@ -858,7 +828,11 @@ def main():
         f"🟠 {tier_counts['high']} high │ "
         f"🟡 {tier_counts['medium']} medium")
 
-    # ── Send Signal ──────────────────────────────────────────
+    # Alerts -------------------------------------------------
+    # The Signal send lived here and answered 404: the daemon it addressed
+    # (signal-cli on :8080) is gone, that port is llama-swap now. Alerts travel in
+    # the report instead, so this writes the part worth reading where the report
+    # can pick it up.
 
     should_send = (
         tier_counts["critical"] > 0
@@ -866,24 +840,20 @@ def main():
         or (not live_only and tier_counts["medium"] > 0)
     )
 
-    signal_sent = False
-    if should_send and actionable:
-        msg = build_signal_message(actionable, check_stats, mode)
-        if msg:
-            if dry_run:
-                log("DRY RUN — would send:")
-                print("─" * 50)
-                print(msg)
-                print("─" * 50)
-            else:
-                log("Sending Signal alert…")
-                signal_sent = send_signal(msg)
-                if signal_sent:
-                    for a in actionable:
-                        state.setdefault("sent_alerts", {})[alert_hash(a)] = NOW_ISO
-                    log("Signal sent ✓")
+    alert_file = f"{REPORT_DIR}/latest-alerts.md"
+    msg = build_alert_message(actionable, check_stats, mode) if (should_send and actionable) else ""
+    if msg:
+        with open(alert_file, "w", encoding="utf-8") as f:
+            f.write(msg + "\n")
+        log(f"Alerts written to {alert_file}")
+        if dry_run:
+            log("DRY RUN - nothing is sent; the file above is what the report would carry")
+            print(msg)
     else:
-        log("All clear — no alerts to send ✓")
+        with open(alert_file, "w", encoding="utf-8") as f:
+            f.write(f"No actionable alerts: {len(all_alerts)} total, "
+                    f"{tier_counts['critical']} critical / {tier_counts['high']} high.\n")
+        log("All clear - nothing to report")
 
     # ── Save report JSON ─────────────────────────────────────
 
@@ -894,7 +864,6 @@ def main():
         "alerts": all_alerts,
         "alert_counts": dict(tier_counts),
         "checks": check_stats,
-        "signal_sent": signal_sent,
         "actionable": len(actionable),
     }
     report_file = f"{REPORT_DIR}/watchdog-{TODAY}-{NOW.strftime('%H%M')}.json"
@@ -907,7 +876,7 @@ def main():
     state["last_mode"] = mode
     state.setdefault("history", []).insert(0, {
         "ts": NOW_ISO, "mode": mode,
-        "counts": dict(tier_counts), "signal": signal_sent,
+        "counts": dict(tier_counts),
     })
     state["history"] = state["history"][:200]
 

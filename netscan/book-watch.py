@@ -58,9 +58,6 @@ PROFILE_PATH = Path("/opt/netscan/profile.json")
 UA = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
 
 # ── Signal ─────────────────────────────────────────────────────────────────
-SIGNAL_RPC = "http://127.0.0.1:8080/api/v1/rpc"
-SIGNAL_FROM = os.environ.get("SIGNAL_ACCOUNT", "+<BOT_PHONE>")
-SIGNAL_TO = os.environ.get("SIGNAL_OWNER", "+<OWNER_PHONE>")
 
 # ── Book topic definitions ─────────────────────────────────────────────────
 
@@ -486,29 +483,6 @@ def _strip_thinking(text):
     return sanitize_llm_output(text) if text else text
 
 
-def signal_send(msg):
-    """Send Signal notification."""
-    try:
-        payload = json.dumps({
-            "jsonrpc": "2.0", "method": "send",
-            "params": {
-                "account": SIGNAL_FROM,
-                "recipient": [SIGNAL_TO],
-                "message": msg,
-            },
-            "id": "book-watch",
-        })
-        req = urllib.request.Request(
-            SIGNAL_RPC, data=payload.encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        urllib.request.urlopen(req, timeout=15)
-        return True
-    except Exception as e:
-        log(f"  Signal send failed: {e}")
-        return False
-
-
 # ── Main scan logic ────────────────────────────────────────────────────────
 
 def scan_topic(topic_id, topic_config, rss_books=None):
@@ -741,7 +715,6 @@ def run_scan(topic_filter=None):
         if analysis:
             summary_lines = analysis.strip().split("\n")[:6]
             alert += "\n" + "\n".join(summary_lines)
-        signal_send(alert[:1500])
         already_sent.update(b.get("title", "") for b in new_books)
         sent_path.write_text(json.dumps(sorted(already_sent)))
     elif hot_books:

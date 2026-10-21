@@ -44,9 +44,6 @@ OLLAMA_MODEL = "gemma4-26b-q3"
 HASS_URL = os.environ.get("HASS_URL", "http://homeassistant:8123")
 HASS_TOKEN = os.environ.get("HASS_TOKEN", "")
 
-SIGNAL_RPC = "http://127.0.0.1:8080/api/v1/rpc"
-SIGNAL_FROM = "+<BOT_PHONE>"
-SIGNAL_TO = "+<OWNER_PHONE>"
 
 DATA_DIR = Path("/opt/netscan/data/correlate")
 RAW_CORRELATE_FILE = DATA_DIR / "raw-correlate.json"
@@ -955,29 +952,6 @@ def detect_garage_events(all_history):
 
 # ── Signal ─────────────────────────────────────────────────────────────────
 
-def signal_send(msg):
-    """Send Signal notification."""
-    try:
-        payload = json.dumps({
-            "jsonrpc": "2.0", "method": "send",
-            "params": {
-                "account": SIGNAL_FROM,
-                "recipient": [SIGNAL_TO],
-                "message": msg,
-            },
-            "id": "ha-correlate",
-        })
-        req = urllib.request.Request(
-            SIGNAL_RPC, data=payload.encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        urllib.request.urlopen(req, timeout=15)
-        log("Signal alert sent")
-        return True
-    except Exception as e:
-        log(f"Signal send failed: {e}")
-        return False
-
 
 # ── Main analysis ──────────────────────────────────────────────────────────
 
@@ -1777,7 +1751,6 @@ Known devices (do NOT flag as anomalies):
             alert_parts = [f"🏠 Home Alert — {dt_label}"]
             alert_parts.extend(new_concerns[:8])
             alert_parts.append(f"\n⏱ {elapsed:.0f}s | Full report on dashboard HOME tab")
-            signal_send("\n".join(alert_parts))
             cooldown_path.write_text(json.dumps(cooldown_data))
             log(f"Signal alert sent: {len(new_concerns)} new concerns (of {len(concerns)} total)")
         else:

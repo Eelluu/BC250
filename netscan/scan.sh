@@ -480,26 +480,8 @@ if new_macs and not first_run:
         alert_lines.append(f"  ...+{len(new_macs)-10} more")
     alert_lines.append(f"\U0001f517 http://127.0.0.1:8888/")
     alert_msg = "\n".join(alert_lines)
-    try:
-        payload = json.dumps({
-            "jsonrpc": "2.0",
-            "method": "send",
-            "params": {
-                "account": "+<BOT_PHONE>",
-                "recipient": ["+<OWNER_PHONE>"],
-                "message": alert_msg
-            },
-            "id": "netscan-alert"
-        })
-        req = urllib.request.Request(
-            "http://127.0.0.1:8080/api/v1/rpc",
-            data=payload.encode(),
-            headers={"Content-Type": "application/json"}
-        )
-        urllib.request.urlopen(req, timeout=10)
-        print(f"  Signal alert: {len(new_macs)} new device(s)")
-    except Exception as ex:
-        print(f"  Signal alert FAILED: {ex}")
+    print(alert_msg)
+    print(f"  New devices: {len(new_macs)} - the job report carries this list")
 elif new_macs and first_run:
     print(f"  First run: {len(new_macs)} devices baselined (no alert)")
 PYEOF
@@ -554,7 +536,6 @@ for line in smart.split("\n"):
 for svc in ["ollama"]:
     h[f"svc_{svc}"] = cmd(f"systemctl is-active {svc}")
 h["svc_openclaw"] = cmd("systemctl --user is-active openclaw-gateway")
-h["svc_signal-cli"] = "active" if cmd("pgrep -x signal-cli") else "dead"
 h["svc_nginx"] = cmd("systemctl is-active nginx")
 
 models = cmd("curl -sf http://127.0.0.1:11434/api/ps 2>/dev/null")
