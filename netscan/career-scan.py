@@ -786,9 +786,9 @@ STRONG_MATCH = [
 ]
 
 LOCATION_OK = [
-    "remote", "fully remote", "work from home", "wfh",
-    "poland", "polska", "łódź", "lodz", "warszawa", "warsaw",
-    "emea", "europe", "anywhere", "global",
+    "remote", "fully remote", "work from home", "wfh", "hybrid", "híbrido", "hibrido",
+    "spain", "españa", "espana", "cordoba", "córdoba", "sevilla", "seville",
+    "malaga", "málaga", "andalucia", "andalucía", "emea", "europe", "anywhere", "global",
 ]
 
 LOCATION_REJECT = [
@@ -802,8 +802,10 @@ LOCATION_REJECT = [
 def get_system_prompt_jobs():
     cv_data = get_cv_context()
     return f"""\
-You are a career intelligence analyst and tech recruiter for a Principal Embedded Software Engineer
-specializing in Linux kernel camera drivers, SoC BSP, and automotive ADAS.
+You are a career intelligence analyst and tech recruiter. Score and pitch the
+candidate strictly against the MASTER PROFILE below: do not assume a seniority
+level or a specialisation the profile does not show, and do not favour a job
+just because it matches a domain the profile never mentions.
 
 CANDIDATE MASTER SKILLS (The Source for Tailoring):
 {cv_data}
