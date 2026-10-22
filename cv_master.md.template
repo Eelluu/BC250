@@ -1,91 +1,48 @@
-# CV Maestro — Perfil Embedded Linux / Kernel / Cámaras
+# CV Maestro — [Tu Nombre]
 
 > **Instrucciones:** Este es el perfil "fuente de verdad" que Clawd usa para
 > generar el texto *"por qué soy bueno para el puesto"* en cada oferta de
-> trabajo (career-scan). Corrige o rellena solo los campos entre **[corchetes]**;
-> cuanto más detallado esté, mejores serán los pitches. No borres secciones.
+> trabajo (career-scan). Rellena los campos entre **[corchetes]**; cuanto más
+> detallado esté, mejores serán los pitches. No borres secciones.
+>
+> El fichero que se usa es `cv_master.md` (sin `.template`), que está en
+> `.gitignore` y **nunca se sube a git**. Este `.template` es el esqueleto
+> público. Para empezar: `cp cv_master.md.template cv_master.md`.
 
 ## 👤 Información Personal
-- **Nombre:** AK
-- **Título profesional:** Principal Embedded Software Engineer — Linux kernel camera drivers, SoC BSP y ADAS de automoción
-- **Ubicación:** Polonia — remoto / híbrido (Łódź o Varsovia)
-- **Idiomas:** Español (nativo), Inglés (técnico fluido), Polaco ([nivel])
+- **Nombre:** [Tu Nombre]
+- **Título profesional:** [Puesto / perfil en una línea]
+- **Ubicación:** [Ciudad, país] — [remoto / híbrido / reubicación]
+- **Contacto:** [teléfono] · [email] · [LinkedIn]
+- **Idiomas:** [idioma (nivel)] · [idioma (nivel)]
 
 ## 🎯 Resumen de Perfil
-Ingeniero de software embebido con **[X+ años]** de experiencia construyendo
-pilas de cámaras en Linux embebido, de extremo a extremo: bring-up de SoC ARM,
-drivers del kernel (V4L2, media subsystem, device tree), enlaces SerDes
-GMSL/FPD-Link para cámaras ADAS, pipelines multimedia GStreamer/FFmpeg con
-aceleración por hardware, y cómputo GPU (Vulkan/ROCm) para IA en el borde.
-Enfoque en sistemas de cámaras para automoción (DMS/OMS, surround view) y
-plataformas de IA local.
+[3–5 líneas: qué sabes hacer, en qué dominio, con qué herramientas, y qué tipo
+de problema te gusta resolver. Es lo que más pesa en el pitch.]
 
-## 🛠️ Habilidades Técnicas
+## 💼 Experiencia
 
-### Kernel Linux & Drivers
-- Drivers de dispositivo: platform_driver, subsistemas I2C/SPI, clock/pinctrl/regulator/PMIC, power domains
-- Subsistema multimedia: **V4L2**, media controller, **libcamera**, videobuf2, V4L2 subdev
-- **Device Tree**: bindings y DTS para Qualcomm, Rockchip, MediaTek, Amlogic, Allwinner, NXP i.MX
-- Buses y periféricos: I2C, SPI, PCIe, **USB** (gadget, XHCI, UVC), GPIO, DMA, IOMMU
-- Gráficos: DRM/KMS, framebuffer, display pipeline, Mesa
+### [Empresa] — [Puesto]
+**[Ubicación] · [Fechas]**
+- [Logro concreto, con cifra si la hay: "reduje el tiempo de X un 30%"]
+- [Segundo logro]
 
-### Cámaras & Imaging (núcleo del perfil)
-- **MIPI CSI-2**, sensores IMX / Omnivision, Bayer, formatos de píxel, ISP
-- **GMSL SerDes**: deserializers MAX96712/MAX96714/MAX96717, serializers MAX9295/MAX9296, **FPD-Link**, coax, control por I2C/UART
-- **UVC** (USB Video Class), cámaras USB3
-- Automotive: **DMS/OMS**, surround view, in-cabin monitoring, ADAS
-
-### Multimedia
-- **GStreamer**: pipelines v4l2src, muxers, encode/decode por hardware
-- **FFmpeg** con aceleración HW: **VAAPI**, Vulkan video, AMF
-- H.264/H.265, transcodificación en tiempo real
-
-### GPU & Cómputo
-- **AMD**: RDNA, Vulkan compute, **ROCm**, Mesa **radv**, amdgpu
-- Plataforma **AMD BC-250** (Zen 2 6c/12t + Cyan Skillfish gfx1013, 16 GB GDDR6)
-- Cómputo heterogéneo, offload a GPU, tuning de VRAM
-
-### IA Local / Edge
-- **llama.cpp** + llama-swap, GGUF, Qwen, Gemma, decodificación especulativa (MTP)
-- **stable-diffusion.cpp**: FLUX.1/FLUX.2, **Qwen-Image 2.1** (T2I & edit), **WAN 2.2** (T2V e I2V), **HiDream-O1**, ESRGAN
-- Backend **Vulkan** para inferencia, cuantización Q4/Q8, gestión de VRAM en 16 GB
-- Bots de IA con tools, memoria y agentes (Discord)
-
-### RISC-V
-- Habilitación de SoC **StarFive**, T-Head; device tree y BSP RISC-V
-
-### Redes, Radio & Seguridad
-- Nmap, análisis de vulnerabilidades, wardriving, pentesting Bluetooth/WiFi
-- **SDR**: RTL-SDR, HackRF; satélites: **NOAA APT**, Meteor-M LRPT, GPS/GNSS, ADS-B, SSTV, AMSAT
-- IoT: Home Assistant, Zigbee, Z-Wave, ESPHome, redes de sensores
-
-### Lenguajes & Herramientas
-- **C, C++, Python, Bash, Rust** (sistemas), YAML/DT, SQL
-- Git, cross-compilation, **Yocto/Buildroot**, systemd/OpenRC, Alpine/Fedora/Arch
-
-## 🖥️ Hardware Propio (banco de trabajo)
-- **AMD BC-250** (16 GB GDDR6, RDNA1) — servidor de IA local + bot 24/7
-- SBCs ARM: Rockchip, Qualcomm, Allwinner
-- Módulos de cámara **MIPI CSI-2** y **GMSL**
-- **RTL-SDR v3**, HackRF
-
-## 🚀 Proyectos Destacados
-- **Plataforma de IA local BC-250:** servidor de inferencia con llama.cpp + llama-swap y stable-diffusion.cpp; bot "Clawd" con cron jobs, memoria, skills y agente de research; generación de imagen/video (Qwen-Image 2.1, FLUX, WAN, HiDream)
-- **Pila de cámara GMSL en Linux:** [describe brevemente tu integración de deserializer/serializer y sensores]
-- **Pipeline multimedia con aceleración HW:** [describe tu pipeline GStreamer/FFmpeg]
-- **Career intelligence scanner:** escáner de ofertas con LLM local que genera pitches personalizados a partir de este CV
-
-## 💼 Experiencia Laboral
-### [Empresa] | [Puesto] | [Fechas]
-- [Logro cuantificable, ej: "bring-up del driver de cámara X reduciendo el tiempo de arranque un 30%"]
-- [Logro 2]
-
-### [Empresa 2] | [Puesto] | [Fechas]
+### [Empresa 2] — [Puesto]
+**[Ubicación] · [Fechas]**
 - [Logro]
 
-## 🎓 Educación y Cursos
-- [Título] — [Institución]
-- [Certificación / Curso] — [Plataforma]
+## 🚀 Proyectos Destacados
+- **[Proyecto]:** [qué es, qué tecnología, qué demuestra]
+- **[Proyecto 2]:** [ídem]
 
-## 🌐 Otros Intereses
-- Contribuciones al kernel de Linux, radioafición (SDR), fotografía, astrofotografía con satélites
+## 🛠️ Capacidades Técnicas
+- **Lenguajes:** [C, C++, Python, …]
+- **Herramientas:** [Git, Linux, …]
+- **Dominio:** [PLC, Modbus, IoT, visión, IA local, …]
+
+## 🎓 Formación Académica
+- **[Título]** — [Institución], [fechas]
+- **[Título 2]** — [Institución], [fechas]
+
+## 🌐 Otros
+- [Idiomas, certificaciones, intereses que sumen al perfil]

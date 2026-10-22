@@ -11,6 +11,8 @@ __pycache__/
 
 # Private user data — career, profile, PDFs (NEVER commit)
 netscan/profile-private.json
+# The real CV, filled in. cv_master.md.template is the committed skeleton.
+cv_master.md
 netscan/crawl-targets.json
 netscan/watchlist.json
 car-known-locations.json
