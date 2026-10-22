@@ -1721,7 +1721,7 @@ def chat_with_llm(user_text, allow_sd=True, attachment_path=None, thread_id=None
             "    Si NO adjunta imagen y pide crear una nueva, usa `generate-image <prompt>`. Texto dentro de la imagen (carteles, rótulos): también `edit-image` o `generate-image`, con el texto entre comillas en el prompt.\n"
             "    PROTOCOLO: el ÚNICO formato válido es `EXEC: <cmd>` en su propia línea. NUNCA emitas tool-calls JSON de otros formatos ({\"action\": ..., \"action_input\": ..., \"dalle.*\", \"thought\": ...}): aquí no existen y no se ejecutan.\n"
             "  FILES: ls [path], cat <file> (solo dentro de /opt/netscan y /tmp), python3 /opt/netscan/..., bash /opt/netscan/...\n"
-            "  SEARCH: ddgr <query>, curl <url> (sin volcar a disco: -o/-O están bloqueados)\n"
+            "  SEARCH: python3 /opt/netscan/web_search.py \"<query>\" (SearXNG local, resultados ya formateados), curl <url> (sin volcar a disco: -o/-O están bloqueados)\n"
             "  MEMORY: save-memory <k> <v>, forget-memory <k>, list-memory, add-lesson <text>, add-correction <wrong> -> <correct>\n"
             "  SKILLS: add-function <name> \"desc\" \"cmd\", remove-function <name>, list-functions\n"
             "  SCRIPTS: propose-script \"summary\" \"why\" <code> — owner approves via Discord buttons\n"
@@ -3151,7 +3151,8 @@ def _handle_tool_help(cmd):
         "edit-image": "EXEC: edit-image <instruction> — Edit the attached reference image (Qwen-Image 2.1, HiDream-O1 or Kontext). Requires an image attachment. Be explicit about what to preserve: 'keep the face and identity unchanged, change the background to a Tokyo skyline'. Example: edit-image make the sky purple",
         "upscale-image": "EXEC: upscale-image — Upscale the attached image 4x with ESRGAN. Requires an image attachment.",
         "generate-video": "EXEC: generate-video <prompt> — Generate a video with WAN 2.2 (~30-40 min). Attach an image to animate it (image-to-video). Example: generate-video waves crashing on shore",
-        "ddgr": "EXEC: ddgr <query> — Search the web using DuckDuckGo. Example: ddgr linux kernel 6.12 release date",
+        "web_search": 'EXEC: python3 /opt/netscan/web_search.py "<query>" — Web search through the local SearXNG (ddgr fallback). Returns numbered results with title, URL and snippet. Use this for any web lookup. Example: python3 /opt/netscan/web_search.py "linux 6.12 release date"',
+        "ddgr": "EXEC: ddgr <query> — Search DuckDuckGo directly. Prefer web_search (SearXNG); ddgr is the fallback when the local service is down.",
         "curl": "EXEC: curl <url> — Fetch a URL to stdout. Writing/uploading files (-o, -O, -T, --output) is blocked. Example: curl https://api.github.com/zen",
         "ls": "EXEC: ls [path] — List directory contents. Restricted to /opt/netscan and /tmp. Example: ls /opt/netscan/data",
         "cat": "EXEC: cat <file> — Show file contents. Restricted to /opt/netscan and /tmp. Example: cat /opt/netscan/data/clawd-memory.json",
