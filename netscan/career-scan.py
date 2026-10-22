@@ -15,7 +15,7 @@ Targets:
   - Tech job boards: LWN.net/jobs, Kernel Newbies
 
 Filters:
-  - Remote-from-Poland OR hybrid in Łódź/Warsaw
+  - Remote-from-Spain OR hybrid in Łódź/Warsaw
   - Kernel, drivers, embedded, camera, V4L2, MIPI, ISP, BSP, SoC
   - Silicon / automotive / consumer electronics industry
 
@@ -108,15 +108,15 @@ COMPANIES = {
         "name": "NVIDIA",
         "career_urls": [],
         "workday_api": "https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite",
-        "workday_searches": ["linux kernel driver Poland", "embedded software Poland remote", "camera driver"],
+        "workday_searches": ["linux kernel driver Spain", "embedded software Spain remote", "camera driver"],
         "keywords": ["kernel", "driver", "linux", "camera", "tegra", "embedded", "V4L2", "BSP"],
         "industry": "silicon",
     },
     "google": {
         "name": "Google",
         "career_urls": [
-            "https://www.google.com/about/careers/applications/jobs/results/?location=Poland&location=Remote&q=linux%20kernel%20driver",
-            "https://www.google.com/about/careers/applications/jobs/results/?location=Poland&location=Remote&q=embedded%20software%20camera",
+            "https://www.google.com/about/careers/applications/jobs/results/?location=Spain&location=Remote&q=linux%20kernel%20driver",
+            "https://www.google.com/about/careers/applications/jobs/results/?location=Spain&location=Remote&q=embedded%20software%20camera",
         ],
         "keywords": ["kernel", "driver", "linux", "chromeos", "camera", "pixel", "embedded", "firmware"],
         "industry": "silicon",
@@ -135,14 +135,14 @@ COMPANIES = {
         "name": "Samsung",
         "career_urls": [],
         "workday_api": "https://sec.wd3.myworkdayjobs.com/wday/cxs/sec/Samsung_Careers",
-        "workday_searches": ["linux kernel driver", "embedded software Poland", "camera firmware"],
+        "workday_searches": ["linux kernel driver", "embedded software Spain", "camera firmware"],
         "keywords": ["kernel", "driver", "linux", "camera", "embedded", "exynos", "firmware"],
         "industry": "silicon",
     },
     "amazon": {
         "name": "Amazon",
         "career_urls": [
-            "https://www.amazon.jobs/en/search?base_query=linux+kernel+driver&loc_query=Poland&country=POL",
+            "https://www.amazon.jobs/en/search?base_query=linux+kernel+driver&loc_query=Spain&country=POL",
             "https://www.amazon.jobs/en/search?base_query=embedded+linux+camera&loc_query=&country=&job_type=Full-Time",
         ],
         "keywords": ["kernel", "driver", "linux", "embedded", "camera", "ring", "alexa", "firmware"],
@@ -168,7 +168,7 @@ COMPANIES = {
     "qualcomm": {
         "name": "Qualcomm",
         "career_urls": [
-            "https://careers.qualcomm.com/careers?query=linux%20kernel%20driver&pid=446700572793&domain=qualcomm.com&location=Poland&triggerGoButton=false",
+            "https://careers.qualcomm.com/careers?query=linux%20kernel%20driver&pid=446700572793&domain=qualcomm.com&location=Spain&triggerGoButton=false",
         ],
         "keywords": ["kernel", "driver", "linux", "camera", "snapdragon", "embedded", "BSP", "MIPI"],
         "industry": "silicon",
@@ -176,7 +176,7 @@ COMPANIES = {
     "arm": {
         "name": "Arm",
         "career_urls": [
-            "https://careers.arm.com/search-jobs?k=linux+kernel&l=Poland&orgIds=3529",
+            "https://careers.arm.com/search-jobs?k=linux+kernel&l=Spain&orgIds=3529",
         ],
         "keywords": ["kernel", "driver", "linux", "embedded", "GPU", "mali", "firmware"],
         "industry": "silicon",
@@ -186,9 +186,9 @@ COMPANIES = {
         "career_urls": [],
         "workday_api": "https://cerence.wd5.myworkdayjobs.com/wday/cxs/cerence/Cerence",
         "workday_searches": ["remote", "engineer", "AI"],
-        "keywords": ["AI", "software", "engineer", "python", "linux", "embedded", "automotive", "NLP", "machine learning", "remote", "Poland"],
+        "keywords": ["AI", "software", "engineer", "python", "linux", "embedded", "automotive", "NLP", "machine learning", "remote", "Spain"],
         "industry": "automotive",
-        "location_filter": ["poland", "polska", "remote", "warsaw", "warszawa"],
+        "location_filter": ["spain", "espana", "remote", "warsaw", "warszawa"],
         "remote_only": True,
     },
     # ── Group A: companies from company-think, now adding career scanning ──
@@ -196,16 +196,16 @@ COMPANIES = {
         "name": "Aptiv",
         "career_urls": [
             "https://www.aptiv.com/en/jobs/search?query=embedded+linux",
-            "https://www.aptiv.com/en/jobs/search?query=software+engineer+Poland",
+            "https://www.aptiv.com/en/jobs/search?query=software+engineer+Spain",
         ],
-        "keywords": ["linux", "embedded", "ADAS", "automotive", "camera", "driver", "software", "Poland"],
+        "keywords": ["linux", "embedded", "ADAS", "automotive", "camera", "driver", "software", "Spain"],
         "industry": "automotive",
     },
     "continental": {
         "name": "Continental",
         "career_urls": [
-            "https://jobs.continental.com/en/search-results/?keywords=embedded+linux&location=Poland",
-            "https://jobs.continental.com/en/search-results/?keywords=ADAS+camera&location=Poland",
+            "https://jobs.continental.com/en/search-results/?keywords=embedded+linux&location=Spain",
+            "https://jobs.continental.com/en/search-results/?keywords=ADAS+camera&location=Spain",
         ],
         "keywords": ["linux", "embedded", "ADAS", "automotive", "camera", "driver", "kernel", "software"],
         "industry": "automotive",
@@ -296,7 +296,7 @@ COMPANIES = {
         "name": "Red Hat",
         "career_urls": [],
         "workday_api": "https://redhat.wd5.myworkdayjobs.com/wday/cxs/redhat/jobs",
-        "workday_searches": ["linux kernel driver", "embedded linux Poland", "kernel engineer remote"],
+        "workday_searches": ["linux kernel driver", "embedded linux Spain", "kernel engineer remote"],
         "keywords": ["linux", "kernel", "driver", "RHEL", "enterprise", "embedded", "remote"],
         "industry": "open_source",
     },
@@ -346,15 +346,15 @@ COMPANIES = {
         "name": "Valeo",
         "career_urls": [],
         "workday_api": "https://valeo.wd3.myworkdayjobs.com/wday/cxs/valeo/valeo_jobs",
-        "workday_searches": ["embedded linux Poland", "ADAS camera", "software engineer Poland remote"],
+        "workday_searches": ["embedded linux Spain", "ADAS camera", "software engineer Spain remote"],
         "keywords": ["linux", "embedded", "ADAS", "camera", "parking", "automotive", "driver", "software"],
         "industry": "automotive",
     },
     "bosch": {
         "name": "Bosch",
         "career_urls": [
-            "https://jobs.bosch.com/en/search-results/?keywords=embedded+linux&country=Poland",
-            "https://jobs.bosch.com/en/search-results/?keywords=ADAS+camera&country=Poland",
+            "https://jobs.bosch.com/en/search-results/?keywords=embedded+linux&country=Spain",
+            "https://jobs.bosch.com/en/search-results/?keywords=ADAS+camera&country=Spain",
         ],
         "keywords": ["linux", "embedded", "ADAS", "automotive", "camera", "driver", "software", "IoT"],
         "industry": "automotive",
@@ -372,7 +372,7 @@ COMPANIES = {
         "name": "NXP Semiconductors",
         "career_urls": [],
         "workday_api": "https://nxp.wd3.myworkdayjobs.com/wday/cxs/nxp/careers",
-        "workday_searches": ["linux kernel driver", "embedded software Poland", "camera BSP", "i.MX software"],
+        "workday_searches": ["linux kernel driver", "embedded software Spain", "camera BSP", "i.MX software"],
         "keywords": ["linux", "kernel", "driver", "i.MX", "embedded", "BSP", "camera", "automotive", "SoC"],
         "industry": "silicon",
     },
@@ -450,16 +450,16 @@ JOB_BOARDS = {
     "linkedin": {
         "name": "LinkedIn",
         "urls": [
-            "https://www.linkedin.com/jobs/search/?keywords=linux%20kernel%20driver&location=Poland&f_WT=2",
-            "https://www.linkedin.com/jobs/search/?keywords=embedded%20linux%20camera&location=Poland&f_WT=2",
+            "https://www.linkedin.com/jobs/search/?keywords=linux%20kernel%20driver&location=Spain&f_WT=2",
+            "https://www.linkedin.com/jobs/search/?keywords=embedded%20linux%20camera&location=Spain&f_WT=2",
         ],
     },
     "indeed": {
         "name": "Indeed (via DDG)",
         "urls": [
             # Indeed blocks direct scraping; DDG HTML search as proxy
-            "https://html.duckduckgo.com/html/?q=site%3Apl.indeed.com+embedded+linux+kernel+driver+Poland",
-            "https://html.duckduckgo.com/html/?q=site%3Apl.indeed.com+camera+firmware+BSP+Poland",
+            "https://html.duckduckgo.com/html/?q=site%3Apl.indeed.com+embedded+linux+kernel+driver+Spain",
+            "https://html.duckduckgo.com/html/?q=site%3Apl.indeed.com+camera+firmware+BSP+Spain",
         ],
     },
     "lwn": {
@@ -521,14 +521,14 @@ INTEL_SOURCES = {
     "levels": {
         "name": "levels.fyi",
         "urls": [
-            "https://www.levels.fyi/t/software-engineer/locations/poland",
+            "https://www.levels.fyi/t/software-engineer/locations/spain",
         ],
     },
     "glassdoor": {
         "name": "Glassdoor",
         "urls": [
-            "https://www.glassdoor.com/Reviews/Poland-embedded-reviews-SRCH_IL.0,6_IN193_KE7,15.htm",
-            "https://www.glassdoor.com/Salaries/poland-embedded-software-engineer-salary-SRCH_IL.0,6_IN193_KO7,33.htm",
+            "https://www.glassdoor.com/Reviews/Spain-embedded-reviews-SRCH_IL.0,6_IN193_KE7,15.htm",
+            "https://www.glassdoor.com/Salaries/spain-embedded-software-engineer-salary-SRCH_IL.0,6_IN193_KO7,33.htm",
         ],
     },
 }
@@ -830,7 +830,7 @@ Rules:
 - STRONGLY prefer: kernel, drivers, camera, V4L2, BSP, embedded Linux, SoC
 - ACCEPT: embedded C/C++, firmware, RTOS if low-level and relevant
 - REJECT: pure application development, web/cloud, DevOps, test automation, AUTOSAR-only
-- Remote-from-Poland or hybrid Łódź/Warsaw = remote_compatible:true
+- Remote-from-Spain or hybrid Łódź/Warsaw = remote_compatible:true
 - US/Asia-only onsite = remote_compatible:false
 - Be aggressive about filtering — quality over quantity
 
@@ -840,7 +840,7 @@ If no relevant jobs found, output: []
 
 SYSTEM_PROMPT_INTEL = """\
 You are a career intelligence analyst monitoring company news, layoffs, hiring
-trends, and salary data for a senior embedded Linux engineer in Poland.
+trends, and salary data for a senior embedded Linux engineer in Spain.
 
 Analyze the raw text from company intel sources and produce a concise briefing.
 
@@ -865,7 +865,7 @@ Rules:
 - Focus on: Nvidia, Google, AMD, Intel, Samsung, Amazon, TCL, Harman, Qualcomm, Arm
 - Flag layoffs at target companies as URGENT
 - Flag hiring surges at target companies as NOTABLE
-- Include salary data for embedded/Linux/kernel roles in Poland if found
+- Include salary data for embedded/Linux/kernel roles in Spain if found
 - Be concise and factual
 
 Output ONLY valid JSON. No markdown.
