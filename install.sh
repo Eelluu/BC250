@@ -1129,13 +1129,56 @@ configure_models() {
     log_info "Found: ${#models[@]} model(s), ${#mmprojs[@]} mmproj(s), ${#mtps[@]} MTP draft(s), ${#dflashs[@]} DFlash draft(s) in ${MODELS_DIR}"
     log_info "Pick a model by number; enter 0 (or just press Enter) when finished."
 
-    # Build config.yaml
-    cat > /opt/llama-swap/config.yaml <<'YAMLEOF'
+    # Build config.yaml. Only seed the header when there is no config yet: this
+    # used to truncate the file, so every pass through this menu wiped the models
+    # already configured AND the aliases that let a client call them by filename.
+    # Everything below is additive.
+    if [[ ! -s /opt/llama-swap/config.yaml ]] || ! grep -qE '^models:' /opt/llama-swap/config.yaml; then
+        cat > /opt/llama-swap/config.yaml <<'YAMLEOF'
 # Keep --port ${PORT} in every cmd. llama-server 0.7 (Oct 2026) changed its
 # default from 8080 to 9931, while llama-swap proxies to ${PORT} (5800+): a cmd
 # without --port starts a server that nothing can reach.
 models:
 YAMLEOF
+    else
+        log_info "config.yaml already has models - keeping them (this menu only appends)."
+    fi
+
+    # Older entries may lack an alias, and a client asking for "model.gguf" then
+    # gets a 404. Repairing them here means a pass through this menu fixes that
+    # instead of causing it. Idempotent: entries that already have aliases: are
+    # left untouched.
+    python3 - <<'PY'
+import re
+path = "/opt/llama-swap/config.yaml"
+try:
+    lines = open(path, encoding="utf-8").read().splitlines()
+except OSError:
+    raise SystemExit(0)
+key_re = re.compile(r"^  ([A-Za-z0-9._-]+):\s*$")
+out, added, i = [], 0, 0
+while i < len(lines):
+    line = lines[i]
+    match = key_re.match(line)
+    out.append(line)
+    if not match:
+        i += 1
+        continue
+    key = match.group(1)
+    j, has_alias = i + 1, False
+    while j < len(lines) and not key_re.match(lines[j]):
+        if lines[j].strip().startswith("aliases:"):
+            has_alias = True
+        j += 1
+    if not has_alias and not key.endswith(".gguf"):
+        out.append('    aliases: ["%s.gguf"]' % key)
+        added += 1
+    out.extend(lines[i + 1:j])
+    i = j
+if added:
+    open(path, "w", encoding="utf-8").write("\n".join(out) + "\n")
+print("  aliases added to existing models: %d" % added)
+PY
 
     while true; do
         echo ""
@@ -1310,8 +1353,15 @@ YAMLEOF
             extra_args="${extra_args} ${extra}"
         done
 
+        if grep -qxF "  ${alias}:" /opt/llama-swap/config.yaml 2>/dev/null; then
+            log_warn "  '${alias}' is already in config.yaml - not adding it twice."
+            log_info "  Delete its block there first if you want to replace it."
+            continue
+        fi
+
         cat >> /opt/llama-swap/config.yaml <<EOF
   ${alias}:
+    aliases: ["${alias}.gguf"]
     cmd: /opt/llama.cpp/build/bin/llama-server --port \${PORT} --model ${gguf_path} -ngl ${ngl} -c ${ctx} -ctk ${kv} -ctv ${kv}${fa_flag}${mmproj_flag}${spec_flag} --temp ${temp} --host 127.0.0.1${extra_args}
     ttl: 600
 
